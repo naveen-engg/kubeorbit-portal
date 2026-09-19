@@ -1,0 +1,417 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubeorbit-demo
+  labels:
+    app.kubernetes.io/part-of: kubeorbit-demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: kubeorbit-demo
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  CACHE_TTL: "3600"
+  FEATURE_FLAGS: "canary_enabled=true,ai_diagnostics=true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secrets
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: kubeorbit-demo
+type: Opaque
+stringData:
+  DB_PASSWORD: "KubeOrbitSuperSecretPassword2026!"
+  API_KEY: "ko_live_998822334455aabbccddeeff"
+---
+# 1. Frontend Web Service (Deployment + Service)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: web-frontend
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: frontend
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        tier: frontend
+        app.kubernetes.io/name: web-frontend
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: nginx-frontend
+        image: nginx:1.27-alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 3
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-frontend-svc
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: web-frontend
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+---
+# 2. Backend API Service (Deployment + Service + ConfigMap + Secret)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-backend
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: backend
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        tier: backend
+        app.kubernetes.io/name: api-backend
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: api-service
+        image: hashicorp/http-echo:0.2.3
+        args:
+        - "-text=KubeOrbit Microservices Backend API v2.1.0 Ready"
+        - "-listen=:8080"
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: api-config
+        - secretRef:
+            name: api-secrets
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
+        livenessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 15
+        readinessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-backend-svc
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+---
+# 3. Redis Cache Service (Deployment + Service)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache-redis
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: cache-redis
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: redis
+    tier: cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        tier: cache
+        app.kubernetes.io/name: cache-redis
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "150m"
+            memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-redis-svc
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: cache-redis
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis
+---
+# 4. Payment Database (StatefulSet + Headless Service + PVC)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: payment-db
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: payment-db
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: payment-db
+    tier: database
+spec:
+  serviceName: payment-db-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-db
+  template:
+    metadata:
+      labels:
+        app: payment-db
+        tier: database
+        app.kubernetes.io/name: payment-db
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        env:
+        - name: POSTGRES_DB
+          value: "payments"
+        - name: POSTGRES_USER
+          value: "payment_admin"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: api-secrets
+              key: DB_PASSWORD
+        ports:
+        - containerPort: 5432
+          name: postgres
+        volumeMounts:
+        - name: payment-data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+  volumeClaimTemplates:
+  - metadata:
+      name: payment-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-db-headless
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: payment-db
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  clusterIP: None
+  selector:
+    app: payment-db
+  ports:
+  - port: 5432
+    name: postgres
+---
+# 5. Node Infrastructure Monitor (DaemonSet)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-monitor
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: node-monitor
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  selector:
+    matchLabels:
+      app: node-monitor
+  template:
+    metadata:
+      labels:
+        app: node-monitor
+        app.kubernetes.io/name: node-monitor
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: metrics-exporter
+        image: busybox:1.36
+        command: ["sh", "-c", "while true; do echo '[Node-Monitor] collecting host node telemetry...'; sleep 30; done"]
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"
+---
+# 6. Database Migration Job (One-off Completed Job)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-schema-migration-v2
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: db-migration
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  template:
+    metadata:
+      labels:
+        app: db-migration
+    spec:
+      containers:
+      - name: migrator
+        image: busybox:1.36
+        command: ["sh", "-c", "echo '[MIGRATE] Applying schema v2.1.0 changes to payment-db...'; sleep 3; echo '[MIGRATE] Schema migration successfully applied!'; exit 0"]
+      restartPolicy: Never
+  backoffLimit: 2
+---
+# 7. Nightly Analytics Sync (CronJob - Every 5 minutes for demo)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: analytics-sync
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: analytics-sync
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  schedule: "*/5 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: analytics-sync
+        spec:
+          containers:
+          - name: sync-worker
+            image: busybox:1.36
+            command: ["sh", "-c", "echo '[ANALYTICS] Syncing daily transaction records... done'; exit 0"]
+          restartPolicy: OnFailure
+---
+# 8. Faulty Worker (Demo Workload for AI Root Cause Analysis & Failure Folding)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faulty-worker
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: faulty-worker
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: faulty-worker
+    tier: analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: faulty-worker
+  template:
+    metadata:
+      labels:
+        app: faulty-worker
+        tier: analytics
+        app.kubernetes.io/name: faulty-worker
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: crashing-app
+        image: busybox:1.36
+        command: ["sh", "-c", "echo '[Worker] Initializing worker buffer...'; sleep 4; echo '[ERROR] Fatal memory allocation failure: OOMKill simulation'; exit 1"]
+        resources:
+          requests:
+            cpu: "20m"
+            memory: "32Mi"
+          limits:
+            cpu: "50m"
+            memory: "64Mi"

@@ -1,0 +1,34 @@
+services:
+  kubeorbit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kubeorbit:latest
+    container_name: kubeorbit
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "8080:8080"
+    environment:
+      - KUBEORBIT_LOG_LEVEL=INFO
+      - KUBEORBIT_AUTH_MODE=none
+      - KUBEORBIT_CONFIG_PATH=/app/config/clusters.yaml
+      - KUBEORBIT_KUBECONFIG_HOME=/root/.kubeorbit/kubeconfigs
+      - HOME=/root
+    volumes:
+      # 1. Google Cloud: Active gcloud login & SA impersonation session
+      - ${APPDATA}/gcloud:/root/.config/gcloud
+
+      # 2. AWS CLI: Placeholder / Active host credentials & SSO sessions
+      - ${USERPROFILE}/.aws:/root/.aws
+
+      # 3. Azure CLI: Placeholder / Active host login & Entra ID tokens
+      - ${USERPROFILE}/.azure:/root/.azure
+
+      # 4. Local Kubernetes: Minikube / Docker Desktop / Kind contexts
+      - ${USERPROFILE}/.kube:/root/.kube
+      - ${USERPROFILE}/.minikube:/root/.minikube
+      - ${USERPROFILE}/.kubeorbit:/root/.kubeorbit
+
+      # 5. Cluster Configurations
+      - ./config/clusters.yaml:/app/config/clusters.yaml

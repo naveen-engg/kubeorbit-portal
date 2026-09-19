@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+config/clusters.yaml
+.kubeorbit/
+*.log
+.DS_Store
+.claude/
