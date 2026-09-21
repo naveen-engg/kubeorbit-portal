@@ -56,7 +56,7 @@ const state = {
   activeView: "overview",
   refreshIntervalSec: 0,
   refreshTimer: null,
-  lastTopologyKey: { network: null, storage: null, map: null },
+  lastTopologyKey: { network: null, storage: null, map: null, resourcemap: null },
   loadTokens: {},
   aiChatSessionId: null,
   aiChatMessages: [],
@@ -299,9 +299,26 @@ async function onClusterChange() {
 
 // -- view: overview -----------------------------------------------------
 
+// Detail-list row for the Control Plane panel -- reuses the same .kv-row
+// styling as the secret/manifest detail views elsewhere in the app.
+function kvRow(label, value) {
+  return h("div", { class: "kv-row" }, [
+    h("div", { class: "kv-row__key" }, label),
+    h("div", { class: "kv-row__value" }, value === null || value === undefined || value === "" ? "—" : String(value)),
+  ]);
+}
+
+// A cloud feature flag (AAD RBAC, IRSA, Dataplane V2, ...) rendered as a
+// pill so enabled/disabled reads at a glance without a column of booleans.
+function featureChip(label, enabled) {
+  return pill(label, enabled ? "healthy" : "muted");
+}
+
 function renderOverview(data) {
-  const { badge, meta, node_count, node_fetch_error, helm } = data;
+  const { badge, meta, node_count, node_fetch_error, helm, nodes } = data;
   $("overview-meta").textContent = `${badge.team_name} · ${capitalize(badge.environment)} · ${badge.cloud}`;
+  const net = meta.network || {};
+  const features = (meta.extra && meta.extra.features) || [];
 
   const children = [
     statGrid([
@@ -317,22 +334,94 @@ function renderOverview(data) {
   if (meta.degraded) children.push(warningBanner(`Cluster metadata could not be fully loaded: ${meta.error || "unknown error"}`));
   if (node_fetch_error) children.push(warningBanner(`Node list could not be loaded: ${node_fetch_error}`));
 
-  children.push(
-    panel(
-      "Node Pools",
-      dataTable(
-        [
-          { key: "name", label: "Name", mono: true },
-          { key: "node_count", label: "Nodes" },
-          { key: "machine_type", label: "Machine Type", mono: true },
-          { label: "Zones", render: (p) => (p.zones || []).join(", ") || "—" },
-          { label: "Autoscaling", render: (p) => (p.autoscaling ? `${p.min_nodes}–${p.max_nodes}` : "Fixed") },
-        ],
-        meta.node_pools,
-        { emptyTitle: "No node pools reported" }
-      )
-    )
+  // -- Control Plane / Data Plane: switched via the same subtabs pattern
+  // the Namespace Resources view uses (see renderNamespaceResources) --
+  // one section visible at a time under a small tab bar, instead of two
+  // panels permanently stacked on top of each other.
+  const dataPlaneNodes = (nodes || []).filter(
+    (n) => !(n.roles || []).some((r) => r.includes("control-plane") || r.includes("master"))
   );
+
+  const planeSections = [
+    {
+      key: "control-plane",
+      label: "Control Plane",
+      render: () =>
+        h("div", { style: "display:flex;flex-direction:column;gap:16px;padding:var(--space-4);" }, [
+          h("div", { class: "kv-list" }, [
+            // Kubernetes Version / Status / Location are intentionally left
+            // out here -- they're already shown in the stat cards above the
+            // tabs, so repeating them in the Control Plane body would just
+            // print the same value twice.
+            kvRow("API Server Endpoint", net.api_server_endpoint),
+            kvRow("VPC / VNet", net.vpc_id),
+            kvRow("Pod CIDR", net.pod_cidr),
+            kvRow("Service CIDR", net.service_cidr),
+            kvRow("CNI", net.cni),
+            kvRow("Network Policy", net.network_policy),
+            kvRow("Private Cluster", net.private_cluster ? "Yes" : "No"),
+          ]),
+          features.length
+            ? h("div", {}, [
+                h("div", { style: "font-size:0.72rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:8px;" }, "Cloud-Specific Features"),
+                h("div", { style: "display:flex;flex-wrap:wrap;gap:8px;" }, features.map((f) => featureChip(f.label, f.enabled))),
+              ])
+            : null,
+        ].filter(Boolean)),
+    },
+    {
+      key: "data-plane",
+      label: "Data Plane",
+      render: () =>
+        h("div", {}, [
+          h("div", { style: "padding:12px 16px 4px;font-size:0.72rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.03em;" }, "Node Pools"),
+          dataTable(
+            [
+              { key: "name", label: "Name", mono: true },
+              { key: "node_count", label: "Nodes" },
+              { key: "machine_type", label: "Machine Type", mono: true },
+              { label: "Zones", render: (p) => (p.zones || []).join(", ") || "—" },
+              { label: "Autoscaling", render: (p) => (p.autoscaling ? `${p.min_nodes}–${p.max_nodes}` : "Fixed") },
+            ],
+            meta.node_pools,
+            { emptyTitle: "No node pools reported" }
+          ),
+          h("div", { style: "padding:16px 16px 4px;font-size:0.72rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.03em;border-top:1px solid var(--border);margin-top:8px;" }, "Nodes"),
+          dataTable(
+            [
+              { key: "name", label: "Name", mono: true, truncate: true },
+              { key: "node_pool", label: "Pool", mono: true },
+              { key: "instance_type", label: "Type", mono: true },
+              { key: "internal_ip", label: "Internal IP", mono: true },
+              { key: "external_ip", label: "External IP", mono: true },
+              { key: "kubernetes_version", label: "Version", mono: true },
+              { label: "Status", render: (n) => statusPill(n.status, n.status === "Ready") },
+            ],
+            dataPlaneNodes,
+            { emptyTitle: "No nodes reported" }
+          ),
+        ]),
+    },
+  ];
+
+  const planeTabsRow = h("div", { class: "subtabs", role: "tablist" });
+  const planePanelBody = h("div", {});
+  const showPlaneSection = (key) => {
+    const section = planeSections.find((s) => s.key === key);
+    planeTabsRow.querySelectorAll(".subtabs__item").forEach((btn) => btn.setAttribute("aria-selected", String(btn.dataset.key === key)));
+    renderInto(planePanelBody, section.render());
+  };
+  for (const section of planeSections) {
+    planeTabsRow.appendChild(
+      h(
+        "button",
+        { class: "subtabs__item", role: "tab", "data-key": section.key, "aria-selected": "false", onClick: () => showPlaneSection(section.key) },
+        section.label
+      )
+    );
+  }
+  showPlaneSection(planeSections[0].key);
+  children.push(h("div", {}, [planeTabsRow, panel(null, planePanelBody)]));
 
   const wi = meta.workload_identity || {};
   children.push(
@@ -2475,7 +2564,14 @@ async function loadResourceMap() {
     controller.setGraphData(graph);
     const rootId = $("resourcemap-resource-select")?.value || "";
     const depth = Number($("resourcemap-depth-select")?.value || 3);
-    controller.filterAndRender(rootId, depth);
+    // Only replay the entrance animation for genuinely new data -- a
+    // routine auto-refresh of the same namespace/root/depth would otherwise
+    // re-run the fade/scale-in cascade on every poll while the map is just
+    // sitting open, which reads as flicker rather than a fresh load.
+    const key = `${state.selectedClusterId}:${ns}:${rootId}:${depth}`;
+    const animate = state.lastTopologyKey.resourcemap !== key;
+    state.lastTopologyKey.resourcemap = key;
+    controller.filterAndRender(rootId, depth, animate);
     controller.resetView();
   } catch (err) {
     if (isStaleToken("resourcemap", token)) return;

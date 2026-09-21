@@ -19,6 +19,7 @@ NODE_POOL_LABELS = (
     "kubernetes.azure.com/agentpool",
 )
 ZONE_LABELS = ("topology.kubernetes.io/zone", "failure-domain.beta.kubernetes.io/zone")
+INSTANCE_TYPE_LABELS = ("node.kubernetes.io/instance-type", "beta.kubernetes.io/instance-type")
 
 
 def _normalize_node(n: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,10 +28,12 @@ def _normalize_node(n: Dict[str, Any]) -> Dict[str, Any]:
     conditions = {c["type"]: c["status"] for c in status.get("conditions", [])}
     node_pool = next((labels[k] for k in NODE_POOL_LABELS if k in labels), None)
     zone = next((labels[k] for k in ZONE_LABELS if k in labels), None)
+    instance_type = next((labels[k] for k in INSTANCE_TYPE_LABELS if k in labels), None)
     roles = [
         k.split("/", 1)[1] for k in labels if k.startswith("node-role.kubernetes.io/")
     ] or ["worker"]
     info = status.get("nodeInfo", {})
+    addresses = {a.get("type"): a.get("address") for a in status.get("addresses", []) or []}
     return {
         "name": n.get("metadata", {}).get("name"),
         "status": "Ready" if conditions.get("Ready") == "True" else "NotReady",
@@ -39,6 +42,9 @@ def _normalize_node(n: Dict[str, Any]) -> Dict[str, Any]:
         "os_image": info.get("osImage"),
         "zone": zone,
         "node_pool": node_pool,
+        "instance_type": instance_type,
+        "internal_ip": addresses.get("InternalIP"),
+        "external_ip": addresses.get("ExternalIP"),
         "cpu_capacity": status.get("capacity", {}).get("cpu"),
         "memory_capacity": status.get("capacity", {}).get("memory"),
         "created_at": _age_iso(n),

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from kube_client import CLIError, TTLCache, read_current_context, run_cli
@@ -187,6 +188,32 @@ class AKSProvider(BaseKubeProvider):
             else "Not fully configured on this cluster."
         )
 
+        network_profile = data.get("networkProfile") or {}
+        api_access = data.get("apiServerAccessProfile") or {}
+        addon_profiles = data.get("addonProfiles") or {}
+
+        # az aks show only surfaces a VNet name when a custom VNet was used
+        # (vnetSubnetID on a node pool) -- clusters on the AKS-managed
+        # default VNet have no such ID, which isn't an error, just means
+        # there's no customer-owned VNet to name.
+        vnet_subnet_id = next(
+            (p.get("vnetSubnetID") for p in data.get("agentPoolProfiles", []) or [] if p.get("vnetSubnetID")),
+            None,
+        )
+        vnet_match = re.search(r"/virtualNetworks/([^/]+)", vnet_subnet_id) if vnet_subnet_id else None
+        private_cluster = bool(api_access.get("enablePrivateCluster"))
+        aad_rbac = bool(data.get("aadProfile"))
+
+        network = {
+            "api_server_endpoint": data.get("fqdn") or data.get("privateFqdn"),
+            "vpc_id": vnet_match.group(1) if vnet_match else "Managed by AKS (default VNet)",
+            "pod_cidr": network_profile.get("podCidr"),
+            "service_cidr": network_profile.get("serviceCidr"),
+            "cni": network_profile.get("networkPlugin"),
+            "network_policy": network_profile.get("networkPolicy") or "None",
+            "private_cluster": private_cluster,
+        }
+
         return ClusterMeta(
             provider="aks",
             cluster_id=self.cluster.id,
@@ -198,9 +225,18 @@ class AKSProvider(BaseKubeProvider):
             console_url=self.get_console_url(),
             logs_url=self.get_logs_url(),
             workload_identity=wi,
+            network=network,
             extra={
-                "aad_rbac_enabled": bool(data.get("aadProfile")),
-                "private_cluster": bool((data.get("apiServerAccessProfile") or {}).get("enablePrivateCluster")),
+                "aad_rbac_enabled": aad_rbac,
+                "private_cluster": private_cluster,
+                "features": [
+                    {"label": "Azure AD RBAC", "enabled": aad_rbac},
+                    {"label": "Private Cluster", "enabled": private_cluster},
+                    {"label": "Workload Identity", "enabled": wi_enabled},
+                    {"label": "OIDC Issuer", "enabled": oidc_enabled},
+                    {"label": "Azure Policy", "enabled": bool((addon_profiles.get("azurepolicy") or {}).get("enabled"))},
+                    {"label": "Key Vault Secrets Provider", "enabled": bool((addon_profiles.get("azureKeyvaultSecretsProvider") or {}).get("enabled"))},
+                ],
             },
         )
 

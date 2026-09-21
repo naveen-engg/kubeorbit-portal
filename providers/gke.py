@@ -151,6 +151,23 @@ class GKEProvider(BaseKubeProvider):
         wi["enabled"] = bool(workload_pool)
         wi["detail"] = f"Workload Pool: {workload_pool}" if workload_pool else "Not configured for this cluster."
 
+        network_config = data.get("networkConfig") or {}
+        private_config = data.get("privateClusterConfig") or {}
+        np_policy = data.get("networkPolicy") or {}
+        autopilot = bool((data.get("autopilot") or {}).get("enabled"))
+        dataplane_v2 = network_config.get("datapathProvider") == "ADVANCED_DATAPATH"
+        private_nodes = bool(private_config.get("enablePrivateNodes"))
+
+        network = {
+            "api_server_endpoint": data.get("endpoint"),
+            "vpc_id": data.get("network"),
+            "pod_cidr": data.get("clusterIpv4Cidr"),
+            "service_cidr": data.get("servicesIpv4Cidr"),
+            "cni": "Dataplane V2 (Cilium)" if dataplane_v2 else "GKE Standard (CNI)",
+            "network_policy": (np_policy.get("provider") or "Calico") if np_policy.get("enabled") else "Disabled",
+            "private_cluster": private_nodes,
+        }
+
         return ClusterMeta(
             provider="gke",
             cluster_id=self.cluster.id,
@@ -162,9 +179,17 @@ class GKEProvider(BaseKubeProvider):
             console_url=self.get_console_url(),
             logs_url=self.get_logs_url(),
             workload_identity=wi,
+            network=network,
             extra={
                 "release_channel": (data.get("releaseChannel") or {}).get("channel"),
-                "private_cluster": bool((data.get("privateClusterConfig") or {}).get("enablePrivateNodes")),
+                "private_cluster": private_nodes,
+                "features": [
+                    {"label": "Workload Identity", "enabled": bool(workload_pool)},
+                    {"label": "Private Nodes", "enabled": private_nodes},
+                    {"label": "Dataplane V2 (Cilium)", "enabled": dataplane_v2},
+                    {"label": "Autopilot", "enabled": autopilot},
+                    {"label": "Network Policy", "enabled": bool(np_policy.get("enabled"))},
+                ],
             },
         )
 

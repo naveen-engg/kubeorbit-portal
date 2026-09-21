@@ -155,7 +155,7 @@ export class ResourceMapController {
     this.panX = cx - (cx - this.panX) * (clampedZoom / this.zoom);
     this.panY = cy - (cy - this.panY) * (clampedZoom / this.zoom);
     this.zoom = clampedZoom;
-    this.updateTransform();
+    this.updateTransform(true);
   }
 
   resetView() {
@@ -182,12 +182,25 @@ export class ResourceMapController {
       this.panX = 0;
       this.panY = 0;
     }
-    this.updateTransform();
+    this.updateTransform(true);
   }
 
-  updateTransform() {
+  // `animated` smooths button-driven zoom/reset with a CSS transition (see
+  // .resourcemap-root-g-animated in styles.css); wheel-zoom and drag-pan
+  // call this every pointer tick with animated=false (the default) so they
+  // stay 1:1 with the input -- a transition fighting continuous input reads
+  // as laggy, not smooth, which is why only the discrete, one-shot actions
+  // (buttons, reset, refit) opt into it.
+  updateTransform(animated = false) {
     const rootG = document.getElementById("resourcemap-root-g");
     if (rootG) {
+      if (animated) {
+        rootG.classList.add("is-animated-transform");
+        clearTimeout(this._transformAnimTimeout);
+        this._transformAnimTimeout = setTimeout(() => rootG.classList.remove("is-animated-transform"), 320);
+      } else {
+        rootG.classList.remove("is-animated-transform");
+      }
       rootG.setAttribute("transform", `translate(${this.panX}, ${this.panY}) scale(${this.zoom})`);
     }
     const pctEl = document.getElementById("resourcemap-zoom-pct");
@@ -225,7 +238,7 @@ export class ResourceMapController {
     });
   }
 
-  filterAndRender(rootId = "", depth = 3) {
+  filterAndRender(rootId = "", depth = 3, animate = true) {
     const allNodes = this.rawGraph.nodes || [];
     const allEdges = this.rawGraph.edges || [];
 
@@ -267,7 +280,7 @@ export class ResourceMapController {
     }
 
     this.computeLayout(rootId);
-    this.renderSVG();
+    this.renderSVG(animate);
 
     if (rootId) {
       this.selectNode(rootId);
@@ -375,6 +388,12 @@ export class ResourceMapController {
     const sortedLayerIndices = Object.keys(layers).map(Number).sort((a, b) => a - b);
     const COL_WIDTH = 190;
     const ROW_HEIGHT = 110;
+    // A layer used to be one column of unlimited height -- a namespace with
+    // eight Deployments meant eight cards stacked straight down, each one
+    // pushing the group card taller. Capping rows-per-layer and wrapping the
+    // overflow into an adjacent sub-column keeps a busy layer roughly square
+    // instead of turning into a single very tall strip.
+    const MAX_ROWS_PER_LAYER = 4;
     let maxRows = 0;
 
     // First column's x must clear the card's own left border by a real
@@ -383,13 +402,19 @@ export class ResourceMapController {
     // any rounding) the group card's own boundary, which is what made the
     // leftmost column of nodes look like it had no left padding at all.
     const LEFT_PAD = NODE_CARD_W / 2 + 20;
-    sortedLayerIndices.forEach((layerIdx, col) => {
+    let colCursor = 0; // next free sub-column slot, advances by however many sub-columns each layer consumes
+    sortedLayerIndices.forEach((layerIdx) => {
       const columnNodes = layers[layerIdx];
-      maxRows = Math.max(maxRows, columnNodes.length);
-      columnNodes.forEach((node, row) => {
-        node.x = originX + LEFT_PAD + col * COL_WIDTH;
+      const subCols = Math.max(1, Math.ceil(columnNodes.length / MAX_ROWS_PER_LAYER));
+      const rowsInLayer = Math.ceil(columnNodes.length / subCols);
+      maxRows = Math.max(maxRows, rowsInLayer);
+      columnNodes.forEach((node, i) => {
+        const subCol = Math.floor(i / rowsInLayer);
+        const row = i % rowsInLayer;
+        node.x = originX + LEFT_PAD + (colCursor + subCol) * COL_WIDTH;
         node.y = originY + 60 + row * ROW_HEIGHT;
       });
+      colCursor += subCols;
     });
 
     // Right edge of the last column's cards, plus a matching ~20px margin --
@@ -397,7 +422,7 @@ export class ResourceMapController {
     // visually equal regardless of column count (the previous formula added
     // LEFT_PAD on top of a flat N*COL_WIDTH, which double-counted it and
     // made single-column groups needlessly wide).
-    const lastColX = LEFT_PAD + Math.max(0, sortedLayerIndices.length - 1) * COL_WIDTH;
+    const lastColX = LEFT_PAD + Math.max(0, colCursor - 1) * COL_WIDTH;
     const width = Math.max(220, lastColX + NODE_CARD_W / 2 + 20);
     const height = Math.max(140, maxRows * ROW_HEIGHT + 40);
     return { width, height };
@@ -442,7 +467,7 @@ export class ResourceMapController {
     return cards;
   }
 
-  renderSVG() {
+  renderSVG(animate = true) {
     this.svg.innerHTML = "";
 
     // SVG Defs
@@ -458,10 +483,15 @@ export class ResourceMapController {
       <filter id="resourcemap-shadow" x="-30%" y="-30%" width="160%" height="160%">
         <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="rgba(0,0,0,0.15)"/>
       </filter>
-      <marker id="resourcemap-arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <!-- refX must sit within the marker's own 0-10 viewBox to land the
+           triangle's tip (drawn at x=10) on the path's actual endpoint --
+           it previously pointed to x=28, well outside the shape entirely,
+           which rendered the arrowhead offset and detached from the line
+           it was supposed to cap. -->
+      <marker id="resourcemap-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
         <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--border-strong, #94a3b8)"/>
       </marker>
-      <marker id="resourcemap-arrow-highlight" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <marker id="resourcemap-arrow-highlight" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
         <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--accent, #1A73E8)"/>
       </marker>
     `;
@@ -548,11 +578,18 @@ export class ResourceMapController {
 
     const nodeMap = new Map(this.activeNodes.map(n => [n.id, n]));
 
+    // A fixed per-edge delay reads as a nice cascade for a handful of
+    // connections but turns into a multi-second crawl once a namespace pulls
+    // in dozens of pods -- cap the *total* spread instead (same approach as
+    // topology.js's shared graph renderer) so a large map still settles in
+    // well under a second.
+    const edgeDelayStep = Math.min(16, 300 / Math.max(1, this.activeEdges.length));
+
     // Render Edges -- anchored to the card's left/right edge (whichever
     // faces the other node) rather than center-to-center, so the curve
     // starts/ends at the card boundary instead of appearing to originate
     // from underneath the label text.
-    this.activeEdges.forEach(e => {
+    this.activeEdges.forEach((e, edgeIdx) => {
       const src = nodeMap.get(e.source);
       const tgt = nodeMap.get(e.target);
       if (!src || !tgt) return;
@@ -560,16 +597,16 @@ export class ResourceMapController {
       const srcX = src.x + (tgt.x >= src.x ? NODE_CARD_W / 2 : -NODE_CARD_W / 2);
       const tgtX = tgt.x + (tgt.x >= src.x ? -NODE_CARD_W / 2 : NODE_CARD_W / 2);
 
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       const dx = tgtX - srcX;
       const cx1 = srcX + dx * 0.5;
       const cy1 = src.y;
       const cx2 = srcX + dx * 0.5;
       const cy2 = tgt.y;
-
       const d = `M ${srcX} ${src.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${tgtX} ${tgt.y}`;
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", d);
-      path.setAttribute("class", "resourcemap-edge");
+      path.setAttribute("class", animate ? "resourcemap-edge is-entering" : "resourcemap-edge");
       path.setAttribute("data-source", e.source);
       path.setAttribute("data-target", e.target);
       path.setAttribute("fill", "none");
@@ -577,8 +614,22 @@ export class ResourceMapController {
       path.setAttribute("stroke-width", "2");
       path.setAttribute("stroke-linecap", "round");
       path.setAttribute("marker-end", "url(#resourcemap-arrow)");
-
+      if (animate) path.style.animationDelay = `${120 + edgeIdx * edgeDelayStep}ms`;
       edgesG.appendChild(path);
+
+      // A second dashed path overlaid on the same curve, whose dash offset
+      // animates continuously -- a subtle "traffic moving downstream"
+      // indicator so a static diagram reads as a live system. Each edge
+      // starts at a different phase (negative delay offset by index) so
+      // parallel edges don't all pulse in visual lockstep.
+      const flow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      flow.setAttribute("d", d);
+      flow.setAttribute("class", "resourcemap-edge-flow");
+      flow.setAttribute("data-source", e.source);
+      flow.setAttribute("data-target", e.target);
+      flow.setAttribute("fill", "none");
+      flow.style.animationDelay = `${-(edgeIdx * 260) % 1600}ms`;
+      edgesG.appendChild(flow);
     });
 
     // Render Nodes -- rectangular cards, not circles. A circle only had
@@ -588,17 +639,24 @@ export class ResourceMapController {
     // topology.js) for the fields that don't fit on the card -- namespace,
     // ports, capacity, and the rest of node.meta.
     const halfW = NODE_CARD_W / 2, halfH = NODE_CARD_H / 2;
-    this.activeNodes.forEach(node => {
+    // Same total-spread cap as edges -- see edgeDelayStep above.
+    const nodeDelayStep = Math.min(22, 480 / Math.max(1, this.activeNodes.length));
+    this.activeNodes.forEach((node, nodeIdx) => {
       const kindKey = (node.kind || node.group || "pod").toLowerCase();
       const theme = RESOURCE_TYPE_THEME[kindKey] || { color: "var(--accent)", bg: "var(--accent-soft)", label: (node.kind || "RESOURCE").toUpperCase(), icon: "" };
 
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
       g.setAttribute("class", "resourcemap-node");
       g.setAttribute("data-id", node.id);
+      g.setAttribute("data-kind", kindKey);
       g.setAttribute("transform", `translate(${node.x}, ${node.y})`);
       g.style.cursor = "pointer";
+      g.style.setProperty("--node-color", theme.color);
 
-      // Selection Halo (hidden unless selected)
+      // Selection Halo (hidden unless selected) -- lives directly on `g`,
+      // outside the entrance-animated inner group below, so its own
+      // continuous pulse animation never has to compose with a one-shot
+      // entrance transform on the same element.
       const halo = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       halo.setAttribute("class", "resourcemap-node-halo");
       halo.setAttribute("x", -halfW - 5);
@@ -614,6 +672,17 @@ export class ResourceMapController {
       halo.style.display = node.id === this.selectedNodeId ? "block" : "none";
       g.appendChild(halo);
 
+      // Everything else lives on an inner group so the entrance animation
+      // (fade + scale, see .resourcemap-node__inner.is-entering) can use a
+      // CSS `transform` without clobbering this node's own SVG positioning
+      // `transform` attribute on `g` -- the two would otherwise fight, since
+      // a CSS transform replaces rather than composes with one set via
+      // attribute (same technique topology.js's shared renderer uses).
+      const inner = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      inner.setAttribute("class", animate ? "resourcemap-node__inner is-entering" : "resourcemap-node__inner");
+      if (animate) inner.style.animationDelay = `${nodeIdx * nodeDelayStep}ms`;
+      g.appendChild(inner);
+
       // Card body
       const card = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       card.setAttribute("class", "resourcemap-node-card");
@@ -626,7 +695,7 @@ export class ResourceMapController {
       card.setAttribute("stroke", theme.color);
       card.setAttribute("stroke-width", "1.5");
       card.setAttribute("filter", "url(#resourcemap-shadow)");
-      g.appendChild(card);
+      inner.appendChild(card);
 
       // Icon chip on the left
       const iconChip = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -637,13 +706,13 @@ export class ResourceMapController {
       iconChip.setAttribute("rx", 6);
       iconChip.setAttribute("fill", theme.color);
       iconChip.setAttribute("fill-opacity", "0.14");
-      g.appendChild(iconChip);
+      inner.appendChild(iconChip);
 
       const iconG = document.createElementNS("http://www.w3.org/2000/svg", "g");
       iconG.setAttribute("transform", `translate(${-halfW + 11}, -6)`);
       iconG.setAttribute("color", theme.color);
       iconG.innerHTML = theme.icon || `<circle cx="12" cy="12" r="6" fill="${theme.color}"/>`;
-      g.appendChild(iconG);
+      inner.appendChild(iconG);
 
       // Name + type, directly on the card face
       const nameText = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -655,7 +724,7 @@ export class ResourceMapController {
       nameText.setAttribute("font-family", "var(--font-ui, sans-serif)");
       const truncated = node.label.length > 16 ? node.label.slice(0, 15) + "…" : node.label;
       nameText.textContent = truncated;
-      g.appendChild(nameText);
+      inner.appendChild(nameText);
 
       const typeText = document.createElementNS("http://www.w3.org/2000/svg", "text");
       typeText.setAttribute("x", -halfW + 34);
@@ -666,7 +735,7 @@ export class ResourceMapController {
       typeText.setAttribute("letter-spacing", "0.05em");
       typeText.setAttribute("font-family", "var(--font-ui, sans-serif)");
       typeText.textContent = theme.label;
-      g.appendChild(typeText);
+      inner.appendChild(typeText);
 
       // Health dot, top-right corner of the card
       const isHealthy = node.status === "healthy" || node.status === "Running" || node.status === "Bound";
@@ -680,7 +749,7 @@ export class ResourceMapController {
       statusDot.setAttribute("fill", dotColor);
       statusDot.setAttribute("stroke", "var(--bg-elevated, #ffffff)");
       statusDot.setAttribute("stroke-width", "1.5");
-      g.appendChild(statusDot);
+      inner.appendChild(statusDot);
 
       // Hover: highlight this node's connections (dim everything else) and
       // show the shared topology tooltip with whatever node.meta fields
@@ -712,46 +781,52 @@ export class ResourceMapController {
     this.svg.appendChild(rootG);
   }
 
+  // Hovering a node previews its direct connections: the edges (and their
+  // animated flow overlays) touching it get an accent glow, its own card
+  // gets a glow filter, and everything not part of this node's chain dims --
+  // driven entirely by CSS classes (see the .is-highlighted/.is-dimmed rules
+  // in styles.css) rather than toggling individual style properties, so the
+  // opacity/stroke/glow changes all transition smoothly together.
   highlightConnections(nodeId) {
     this.hoveredNodeId = nodeId;
     const connectedNodeIds = new Set([nodeId]);
 
-    document.querySelectorAll(".resourcemap-edge").forEach(edge => {
+    document.querySelectorAll(".resourcemap-edge, .resourcemap-edge-flow").forEach(edge => {
       const src = edge.getAttribute("data-source");
       const tgt = edge.getAttribute("data-target");
       if (src === nodeId || tgt === nodeId) {
         connectedNodeIds.add(src);
         connectedNodeIds.add(tgt);
-        edge.setAttribute("stroke", "var(--accent, #1A73E8)");
-        edge.setAttribute("stroke-width", "3.5");
-        edge.setAttribute("marker-end", "url(#resourcemap-arrow-highlight)");
-        edge.style.opacity = "1";
+        edge.classList.add("is-highlighted");
+        edge.classList.remove("is-dimmed");
+        if (edge.classList.contains("resourcemap-edge")) edge.setAttribute("marker-end", "url(#resourcemap-arrow-highlight)");
       } else {
-        edge.style.opacity = "0.2";
+        edge.classList.add("is-dimmed");
+        edge.classList.remove("is-highlighted");
       }
     });
 
     document.querySelectorAll(".resourcemap-node").forEach(n => {
       const id = n.getAttribute("data-id");
       if (connectedNodeIds.has(id)) {
-        n.style.opacity = "1";
+        n.classList.add("is-highlighted");
+        n.classList.remove("is-dimmed");
       } else {
-        n.style.opacity = "0.35";
+        n.classList.add("is-dimmed");
+        n.classList.remove("is-highlighted");
       }
     });
   }
 
   clearHighlights() {
     this.hoveredNodeId = null;
-    document.querySelectorAll(".resourcemap-edge").forEach(edge => {
-      edge.setAttribute("stroke", "var(--border-strong, #cbd5e1)");
-      edge.setAttribute("stroke-width", "2");
-      edge.setAttribute("marker-end", "url(#resourcemap-arrow)");
-      edge.style.opacity = "1";
+    document.querySelectorAll(".resourcemap-edge, .resourcemap-edge-flow").forEach(edge => {
+      edge.classList.remove("is-highlighted", "is-dimmed");
+      if (edge.classList.contains("resourcemap-edge")) edge.setAttribute("marker-end", "url(#resourcemap-arrow)");
     });
 
     document.querySelectorAll(".resourcemap-node").forEach(n => {
-      n.style.opacity = "1";
+      n.classList.remove("is-highlighted", "is-dimmed");
     });
   }
 

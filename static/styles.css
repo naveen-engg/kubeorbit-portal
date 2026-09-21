@@ -1337,12 +1337,17 @@ select option, .select option {
 }
 
 /* 6. Interactive Resource Map Styles */
-.resourcemap-node {
-  transition: opacity 0.2s ease, transform 0.15s ease;
-}
-.resourcemap-node:hover .resourcemap-node-circle {
-  stroke-width: 4px;
-  filter: drop-shadow(0 4px 12px rgba(26, 115, 232, 0.35));
+.resourcemap-node { cursor: pointer; }
+
+/* Entrance animation lives on the inner wrapper, not .resourcemap-node
+   itself -- the outer <g> carries this node's SVG positioning `transform`
+   attribute, and a CSS transform (from an animation) replaces rather than
+   composes with that, same reasoning as topology.js's shared graph
+   renderer. Opacity + a small translateY only, no scale -- animating scale
+   alongside the card's drop-shadow filter recomputes the shadow every
+   frame, which is visibly janky once several cards animate at once. */
+.resourcemap-node__inner.is-entering {
+  animation: topo-node-in 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 .resourcemap-node-halo {
   animation: resourcemap-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
@@ -1351,9 +1356,48 @@ select option, .select option {
   0%, 100% { transform: scale(1); opacity: 0.8; }
   50% { transform: scale(1.18); opacity: 0.3; }
 }
+
+/* Hover-to-highlight: connected nodes/edges brighten (glow filter swaps in
+   for the resting drop-shadow), everything else recedes -- driven by
+   classes toggled in resourcemap.js's highlightConnections()/
+   clearHighlights() so opacity, stroke, and glow all transition together
+   instead of snapping. */
+.resourcemap-node { transition: opacity 0.2s ease; }
+.resourcemap-node.is-dimmed { opacity: 0.3; }
+.resourcemap-node.is-highlighted .resourcemap-node-card {
+  stroke-width: 2.5;
+  filter: url(#resourcemap-glow);
+}
 .resourcemap-edge {
   transition: stroke 0.2s ease, stroke-width 0.2s ease, opacity 0.2s ease;
 }
+.resourcemap-edge.is-entering { animation: topo-edge-in 320ms ease backwards; }
+.resourcemap-edge.is-highlighted { stroke: var(--accent, #1A73E8) !important; stroke-width: 3.5 !important; }
+.resourcemap-edge.is-dimmed { opacity: 0.15; }
+
+/* Overlaid dashed path per edge whose dash offset animates continuously --
+   a subtle "traffic moving downstream" indicator (reuses topology.js's
+   @keyframes topo-flow) so the map reads as a live system rather than a
+   static diagram. Runs forever; frozen automatically by the
+   prefers-reduced-motion rule above. */
+.resourcemap-edge-flow {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 1 11;
+  opacity: 0.7;
+  animation: topo-flow 1.8s linear infinite;
+  transition: opacity 0.2s ease, stroke 0.2s ease;
+}
+.resourcemap-edge-flow.is-highlighted { stroke: var(--accent-2, var(--accent)); opacity: 1; }
+.resourcemap-edge-flow.is-dimmed { opacity: 0.06; }
+
+/* Smooths button/reset-triggered zoom changes only -- applied as a
+   temporary class (see updateTransform()'s `animated` param) rather than
+   left on permanently, so wheel-zoom and drag-pan stay immediate and 1:1
+   with the pointer instead of lagging behind a transition. */
+#resourcemap-root-g.is-animated-transform { transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1); }
+
 .resourcemap-zoom-controls button {
   transition: background 150ms, color 150ms;
 }

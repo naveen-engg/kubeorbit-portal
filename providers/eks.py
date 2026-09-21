@@ -167,6 +167,28 @@ class EKSProvider(BaseKubeProvider):
         wi["enabled"] = bool(oidc_issuer)
         wi["detail"] = f"OIDC issuer: {oidc_issuer}" if oidc_issuer else "No OIDC provider associated with this cluster."
 
+        vpc_config = cluster_data.get("resourcesVpcConfig") or {}
+        net_config = cluster_data.get("kubernetesNetworkConfig") or {}
+        encryption_config = cluster_data.get("encryptionConfig") or []
+        enabled_log_types = [
+            t for entry in (cluster_data.get("logging") or {}).get("clusterLogging") or []
+            if entry.get("enabled") for t in entry.get("types", [])
+        ]
+        public_access = bool(vpc_config.get("endpointPublicAccess"))
+        private_access = bool(vpc_config.get("endpointPrivateAccess"))
+
+        network = {
+            "api_server_endpoint": cluster_data.get("endpoint"),
+            "vpc_id": vpc_config.get("vpcId"),
+            # AWS VPC CNI hands pods routable VPC IPs directly -- there's no
+            # separate pod CIDR the way GKE/AKS overlay networking has one.
+            "pod_cidr": None,
+            "service_cidr": net_config.get("serviceIpv4Cidr") or net_config.get("serviceIpv6Cidr"),
+            "cni": "Amazon VPC CNI (default)",
+            "network_policy": None,
+            "private_cluster": private_access and not public_access,
+        }
+
         return ClusterMeta(
             provider="eks",
             cluster_id=self.cluster.id,
@@ -178,7 +200,17 @@ class EKSProvider(BaseKubeProvider):
             console_url=self.get_console_url(),
             logs_url=self.get_logs_url(),
             workload_identity=wi,
-            extra={"platform_version": cluster_data.get("platformVersion")},
+            network=network,
+            extra={
+                "platform_version": cluster_data.get("platformVersion"),
+                "features": [
+                    {"label": "IAM Roles for Service Accounts (IRSA)", "enabled": bool(oidc_issuer)},
+                    {"label": "Private Endpoint Access", "enabled": private_access},
+                    {"label": "Public Endpoint Access", "enabled": public_access},
+                    {"label": "Secrets Encryption (KMS)", "enabled": bool(encryption_config)},
+                    {"label": "Control Plane Logging", "enabled": bool(enabled_log_types)},
+                ],
+            },
         )
 
     async def _describe_nodegroups(self, region: str, cluster_name: str, env: Dict[str, str]):

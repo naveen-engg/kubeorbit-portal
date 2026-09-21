@@ -421,6 +421,7 @@ async def cluster_info(ctx: ClusterContext = Depends(get_cluster_context)) -> Di
         "node_count": len(nodes),
         "node_fetch_error": node_fetch_error,
         "helm": helm,
+        "nodes": nodes,
     }
 
 

@@ -70,6 +70,12 @@ class ClusterMeta:
     console_url: Optional[str] = None
     logs_url: Optional[str] = None
     workload_identity: Dict[str, Any] = field(default_factory=dict)
+    # Control-plane networking facts (API server endpoint, VPC/VNet, pod/
+    # service CIDR, CNI, network policy, private-cluster flag) -- common keys
+    # across every provider so the frontend's Control Plane panel never has
+    # to branch on cloud. A provider leaves a key out (None) rather than
+    # guessing when its API genuinely doesn't expose it.
+    network: Dict[str, Any] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
     degraded: bool = False
     error: Optional[str] = None

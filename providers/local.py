@@ -151,5 +151,14 @@ class LocalProvider(BaseKubeProvider):
             node_pools=[NodePoolInfo(name="local-pool", node_count=node_count)],
             console_url=self.get_console_url(),
             workload_identity=self.get_workload_identity_info(),
-            extra={},
+            network={
+                "api_server_endpoint": None,
+                "vpc_id": None,
+                "pod_cidr": None,
+                "service_cidr": None,
+                "cni": None,
+                "network_policy": None,
+                "private_cluster": False,
+            },
+            extra={"features": []},
         )
