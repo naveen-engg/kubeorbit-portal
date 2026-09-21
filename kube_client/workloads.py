@@ -24,7 +24,7 @@ from .resources import (
 async def get_workloads_catalog(
     context: str, kubeconfig: Path, namespace: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Return complete catalog of Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs."""
+    """Return complete catalog of Pods, Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs."""
     ns = namespace if namespace else ""
     deps, ssets, dsets, jobs, cjobs, pods = await asyncio.gather(
         get_deployments(context, kubeconfig, ns),
@@ -78,6 +78,7 @@ async def get_workloads_catalog(
         "daemonsets": dsets,
         "jobs": jobs,
         "cronjobs": cjobs,
+        "pods": pods,
     }
 
 

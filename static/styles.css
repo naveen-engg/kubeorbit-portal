@@ -268,10 +268,6 @@ strong, b { font-weight: 700; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes fade-in-up { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes pop-in { from { opacity: 0; transform: translateY(10px) scale(0.94); } to { opacity: 1; transform: none; } }
-/* Same pop-in, but for an element whose resting transform is rotate(45deg)
-   (the Cluster Map's diamond pod chips) -- ending at "none" like the plain
-   pop-in would snap it back to square the instant the animation finishes. */
-@keyframes pop-in-diamond { from { opacity: 0; transform: rotate(45deg) scale(0.4); } to { opacity: 1; transform: rotate(45deg) scale(1); } }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @keyframes modal-in { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: none; } }
 /* Opacity + a small translateY only -- no scale. Scale would recompute
@@ -681,6 +677,20 @@ select option, .select option {
   opacity: 0.85;
 }
 .stat-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-raised-lg); }
+/* Workloads Overview's stat cards double as the Workload Catalog's type
+   filter now (click a card to open that type's list inline -- see
+   toggleWorkloadCatalogType() in app.js) -- cursor + a stronger hover ring
+   signal that, and the selected card stays visibly "pressed" (accent
+   border + soft inset) while its list is open, mirroring the pressed/
+   selected treatment used for sidebar tabs elsewhere in the app. */
+.stat-card--clickable { cursor: pointer; }
+.stat-card--clickable:hover { border-color: var(--border-strong); }
+.stat-card--clickable:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.stat-card--selected {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-inset), inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.stat-card--selected:hover { transform: none; }
 .stat-card__header { display: flex; align-items: center; gap: 6px; }
 .stat-card__icon { display: inline-flex; flex-shrink: 0; color: var(--fg-subtle); }
 .stat-card__icon svg { display: block; width: 14px; height: 14px; }
@@ -983,9 +993,9 @@ select option, .select option {
   margin: var(--space-5) 0; box-shadow: var(--shadow-raised-sm);
 }
 .cmap-legend__item { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 600; color: var(--fg-muted); }
-/* Same faceted-diamond language as .cmap-pod-chip below (a static swatch
-   here, not clickable) so a namespace's color reads consistently whether
-   it's labeling a legend entry or an actual pod tile. */
+/* A faceted diamond -- purely a color key (never clickable), so it stays a
+   distinct shape from .cmap-pod-chip's bar ticks below, which represent
+   actual individual pods. */
 .cmap-legend__swatch {
   width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex-shrink: 0;
   margin: 0 2px;
@@ -1032,7 +1042,14 @@ select option, .select option {
 .cmap-gauge__ring-wrap { position: relative; width: 64px; height: 64px; }
 .cmap-gauge__ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .cmap-gauge__track { fill: none; stroke: var(--bg-inset); stroke-width: 5; }
-.cmap-gauge__fill { fill: none; stroke-width: 5; stroke-linecap: round; transition: stroke-dashoffset 900ms cubic-bezier(0.22,1,0.36,1), stroke 300ms ease; }
+.cmap-gauge__fill {
+  fill: none; stroke-width: 5; stroke-linecap: round;
+  transition: stroke-dashoffset 900ms cubic-bezier(0.22,1,0.36,1), stroke 300ms ease;
+  /* currentColor here resolves from each circle's own inline `color` (set
+     alongside `stroke` in app.js) so the glow always matches that ring's
+     actual stroke, not some unrelated inherited text color. */
+  filter: drop-shadow(0 0 3px color-mix(in srgb, currentColor 50%, transparent));
+}
 .cmap-gauge__pct {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-family: var(--font-mono); font-weight: 800; font-size: 0.8rem; color: var(--fg);
@@ -1053,35 +1070,37 @@ select option, .select option {
 .cmap-ns-row { display: flex; flex-direction: column; gap: 5px; }
 .cmap-ns-row__label { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 600; color: var(--fg-muted); }
 .cmap-podlegend__count { opacity: 0.7; font-size: 0.68rem; }
-.cmap-pod-chips { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px 0; }
-/* Faceted "gem" tile, one per pod -- a rotated square (the same shape this
-   app already uses as its Pod *kind* icon in the Resource Map/Workload
-   Catalog, see RESOURCE_TYPE_THEME.pod in resourcemap.js), not a plain flat
-   dot: a light-to-base diagonal gradient gives each tile a subtle faceted
-   pop instead of a single flat fill. Sized down from its 16px cell and
-   margined out so the ~1.41x diagonal from the 45deg rotation doesn't clip
-   into neighboring tiles. */
+.cmap-pod-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px 0; }
+/* Glossy 3D badge, one per pod -- a mini isometric cube icon (POD_CUBE_ICON
+   in app.js) on a 3-stop gradient tile, the same "colored badge with a
+   white icon" language the provider badges use elsewhere in this app.
+   Tried a flat square, a diamond, then a bar-chart tick first; those were
+   all still just a flat shape repeated N times. */
 .cmap-pod-chip {
-  width: 11px; height: 11px; flex-shrink: 0; margin: 2px;
-  border-radius: 3px;
-  transform: rotate(45deg);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--chip-color) 65%, white 30%), var(--chip-color) 75%);
+  width: 18px; height: 18px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--chip-color) 55%, white 35%) 0%,
+    var(--chip-color) 55%,
+    color-mix(in srgb, var(--chip-color) 80%, black 25%) 100%);
   box-shadow: var(--shadow-xs);
   cursor: pointer;
-  animation: pop-in-diamond 320ms cubic-bezier(0.22,1,0.36,1) backwards;
+  animation: pop-in 320ms cubic-bezier(0.22,1,0.36,1) backwards;
   transition: transform 150ms cubic-bezier(0.34,1.56,0.64,1), box-shadow 150ms ease, filter 150ms ease;
 }
+.cmap-pod-chip svg { width: 11px; height: 11px; display: block; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.25)); }
 .cmap-pod-chip:hover, .cmap-pod-chip:focus-visible {
-  transform: rotate(45deg) scale(1.6);
+  transform: scale(1.4) translateY(-2px);
   box-shadow: var(--shadow-raised-md);
-  filter: brightness(1.15);
+  filter: brightness(1.12);
   position: relative; z-index: 1;
 }
 .cmap-pod-chip:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 /* Pods with no known name (count-only data) aren't clickable -- visually
    flatten them so hover/focus doesn't imply an action that does nothing. */
-.cmap-pod-chip[tabindex="-1"] { cursor: default; opacity: 0.55; }
-.cmap-pod-chip[tabindex="-1"]:hover, .cmap-pod-chip[tabindex="-1"]:focus-visible { transform: rotate(45deg); box-shadow: var(--shadow-xs); filter: none; }
+.cmap-pod-chip[tabindex="-1"] { cursor: default; opacity: 0.5; }
+.cmap-pod-chip[tabindex="-1"]:hover, .cmap-pod-chip[tabindex="-1"]:focus-visible { transform: none; box-shadow: var(--shadow-xs); filter: none; }
 
 /* -- footer status strip -- */
 .status-strip {

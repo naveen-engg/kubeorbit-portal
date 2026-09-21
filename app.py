@@ -733,7 +733,7 @@ async def workloads_catalog(
     namespace: Optional[str] = OptionalNamespaceQuery,
     ctx: ClusterContext = Depends(get_cluster_context),
 ) -> Dict[str, Any]:
-    """Catalog of Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs."""
+    """Catalog of Pods, Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs."""
     catalog = await kube_client.get_workloads_catalog(ctx.context, ctx.kubeconfig, namespace)
     return {"cluster_id": ctx.cluster.id, **catalog}
 

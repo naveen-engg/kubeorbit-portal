@@ -238,8 +238,6 @@ async function populateNamespaceSelects(clusterId) {
   setSidebarCount("count-namespaces", general.length);
 
   fillSelect($("workloads-namespace-select"), general, { placeholder: "All namespaces (excl. system)" });
-  if ($("pods-namespace-select")) fillSelect($("pods-namespace-select"), general, { placeholder: "All namespaces" });
-  if ($("catalog-namespace-select")) fillSelect($("catalog-namespace-select"), general, { placeholder: "All namespaces" });
   if ($("applications-namespace-select")) fillSelect($("applications-namespace-select"), general, { placeholder: "All namespaces" });
   if ($("resourcemap-namespace-select")) fillSelect($("resourcemap-namespace-select"), general);
   fillSelect($("events-namespace-select"), general, { placeholder: "All namespaces (excl. system)" });
@@ -486,21 +484,68 @@ function kindIcon(kind) {
   return theme ? `<svg viewBox="0 0 24 24">${theme.icon}</svg>` : "";
 }
 
-function renderWorkloads(data) {
+// Workload-type categories shown as stat cards on the Overview. Each maps
+// 1:1 to a CATALOG_TYPES key (defined further below) -- Pods used to have
+// its own separate nav item/view; folded in here the same way as the rest.
+const WORKLOAD_STAT_CATEGORIES = [
+  ["Pods", "pods", "pods"],
+  ["Deployments", "deployments", "deployments"],
+  ["StatefulSets", "statefulsets", "statefulsets"],
+  ["DaemonSets", "daemonsets", "daemonsets"],
+  ["Jobs", "jobs", "jobs"],
+];
+
+let workloadsOverviewData = null; // cached so expanding/collapsing a type doesn't need to re-fetch the stat totals
+
+// Overview used to be a dead end -- see the totals, then go dig through the
+// separate Workload Catalog page to actually find a resource of that type.
+// Clicking a stat card now opens that type's full list right here (the same
+// row renderers CATALOG_TYPES already used), collapsing the two views the
+// user asked to combine into one.
+// statCard() returns a plain <div> -- not focusable or keyboard-activatable
+// on its own, so a card meant to be clicked needs the same tabindex/role/
+// keydown treatment any other custom interactive element in this app gets
+// (see e.g. the Cluster Map's namespace chips) rather than only a mouse
+// click handler.
+function makeStatCardClickable(card, onActivate) {
+  card.setAttribute("tabindex", "0");
+  card.setAttribute("role", "button");
+  card.addEventListener("click", onActivate);
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onActivate(); }
+  });
+}
+
+function renderWorkloadStats(data) {
+  if (!data) return;
+  const o = data.overview;
+  const cards = WORKLOAD_STAT_CATEGORIES.map(([label, statKey, catalogKey]) => {
+    const stat = o[statKey];
+    const card = statCard(
+      label, stat.total,
+      [pill(`${stat.healthy} healthy`, "healthy"), stat.unhealthy ? pill(`${stat.unhealthy} unhealthy`, "critical") : null],
+      kindIcon(label.toLowerCase().replace(/s$/, ""))
+    );
+    card.classList.add("stat-card--clickable");
+    if (catalogTypeFilter === catalogKey) card.classList.add("stat-card--selected");
+    makeStatCardClickable(card, () => toggleWorkloadCatalogType(catalogKey));
+    return card;
+  });
+  const cronCard = statCard("CronJobs", o.cronjobs.total, [pill(`${o.cronjobs.active} active`, "healthy")], kindIcon("cronjob"));
+  cronCard.classList.add("stat-card--clickable");
+  if (catalogTypeFilter === "cronjobs") cronCard.classList.add("stat-card--selected");
+  makeStatCardClickable(cronCard, () => toggleWorkloadCatalogType("cronjobs"));
+  cards.push(cronCard);
+  renderInto($("workloads-stats"), statGrid(cards));
+}
+
+function renderWorkloadIssues(data) {
   const o = data.overview;
   const categories = [
-    ["Pods", o.pods],
-    ["Deployments", o.deployments],
-    ["StatefulSets", o.statefulsets],
-    ["DaemonSets", o.daemonsets],
-    ["Jobs", o.jobs],
+    ["Pods", o.pods], ["Deployments", o.deployments], ["StatefulSets", o.statefulsets],
+    ["DaemonSets", o.daemonsets], ["Jobs", o.jobs],
   ];
-  const cards = categories.map(([label, stat]) =>
-    statCard(label, stat.total, [pill(`${stat.healthy} healthy`, "healthy"), stat.unhealthy ? pill(`${stat.unhealthy} unhealthy`, "critical") : null], kindIcon(label.toLowerCase().replace(/s$/, "")))
-  );
-  cards.push(statCard("CronJobs", o.cronjobs.total, [pill(`${o.cronjobs.active} active`, "healthy")], kindIcon("cronjob")));
-
-  const children = [statGrid(cards)];
+  const children = [];
   for (const [label, stat] of categories) {
     if (!stat.issues || !stat.issues.length) continue;
     children.push(
@@ -521,13 +566,25 @@ function renderWorkloads(data) {
   if (categories.every(([, s]) => !s.unhealthy)) {
     children.push(emptyState("All workloads healthy", "No unhealthy Pods, Deployments, StatefulSets, DaemonSets, or Jobs were found."));
   }
-  renderInto($("workloads-content"), h("div", {}, children));
+  renderInto($("workloads-issues"), h("div", {}, children));
+}
+
+function renderWorkloads(data) {
+  workloadsOverviewData = data;
+  renderWorkloadStats(data);
+  renderWorkloadIssues(data);
 }
 
 async function loadWorkloads() {
-  const container = $("workloads-content");
+  const statsContainer = $("workloads-stats");
   const token = nextLoadToken("workloads");
-  renderInto(container, loadingSkeleton());
+  renderInto(statsContainer, loadingSkeleton());
+  renderInto($("workloads-issues"), h("div", {}));
+  // Data is for a (possibly new) namespace -- collapse any open catalog
+  // panel rather than leave it showing a stale, now-mismatched type list.
+  catalogTypeFilter = null;
+  const catalogPanel = $("workloads-catalog-panel");
+  if (catalogPanel) catalogPanel.hidden = true;
   try {
     const namespace = $("workloads-namespace-select").value || undefined;
     const data = await api.getWorkloads(state.selectedClusterId, namespace);
@@ -535,7 +592,7 @@ async function loadWorkloads() {
     renderWorkloads(data);
   } catch (err) {
     if (isStaleToken("workloads", token)) return;
-    renderInto(container, errorState(err, loadWorkloads));
+    renderInto(statsContainer, errorState(err, loadWorkloads));
   }
 }
 
@@ -993,105 +1050,48 @@ function closeManifestModal() {
   if (modal) modal.hidden = true;
 }
 
-async function loadPods() {
-  const container = $("pods-content");
-  const token = nextLoadToken("pods");
-  renderInto(container, loadingSkeleton());
-  try {
-    // /namespaces/{ns}/resources has no "all namespaces" variant, so the
-    // placeholder option ("" -- shown as "All namespaces") needs a real
-    // fallback namespace. It must come from this cluster's own freshly
-    // populated <select> (populateNamespaceSelects() repopulates it on every
-    // cluster switch), never a hardcoded name -- that previously fell back
-    // to a namespace that only exists on the minikube demo cluster, so
-    // switching to any other cluster silently queried a namespace that
-    // doesn't exist there.
-    const nsSelect = $("pods-namespace-select");
-    const ns = nsSelect?.value || nsSelect?.querySelector("option[value]:not([value=''])")?.value;
-    if (!ns) {
-      renderInto(container, emptyState("No namespaces", "This cluster has no namespaces to show pods for."));
-      return;
-    }
-    const data = await api.getNamespaceResources(state.selectedClusterId, ns);
-    if (isStaleToken("pods", token)) return;
-    renderPods(data);
-  } catch (err) {
-    if (isStaleToken("pods", token)) return;
-    renderInto(container, errorState(err, loadPods));
-  }
-}
+// -- workload catalog: inline listing opened from an Overview stat card -----
+// Pods/Deployments/StatefulSets/DaemonSets/Jobs/CronJobs used to be 6
+// separate nav items and pages (Pods on its own getNamespaceResources
+// endpoint, the rest sharing getWorkloadsCatalog()), then briefly a
+// standalone "Workload Catalog" page with its own type-filter chip
+// row. Folded into the Overview page instead: clicking a stat card opens the
+// matching type's list right there (see toggleWorkloadCatalogType() and
+// renderCatalogPanelBody() below, and workloads-catalog-panel in index.html)
+// -- one fetch, same row renderers, no second page to navigate to.
 
-function renderPods(data) {
-  const container = $("pods-content");
-  const pods = data.pods || [];
-  const filter = ($("pods-search")?.value || "").toLowerCase();
+let catalogData = null;
+let catalogDataNamespace; // which namespace catalogData was fetched for, so switching types doesn't re-fetch but switching namespaces does
+let catalogTypeFilter = null; // null = no type currently expanded on Overview
 
-  const filtered = pods.filter(
-    (p) =>
-      (p.namespace || "") !== "kube-system" &&
-      (!filter ||
-        p.name.toLowerCase().includes(filter) ||
-        (p.namespace || "").toLowerCase().includes(filter))
-  );
-  if ($("pods-count-badge")) $("pods-count-badge").textContent = `${filtered.length} items`;
-
-  if (!filtered.length) {
-    renderInto(container, emptyState("No pods found", "No matching pods found in this namespace."));
-    return;
-  }
-
-  const rows = filtered.map((pod) => {
-    const isRunning = pod.status === "Running" || pod.phase === "Running";
-
-    return h("div", {
-      className: "pod-card-row card",
-      style: "display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;box-shadow:var(--shadow-raised-sm);"
-    }, [
+// Pods used to have their own view backed by a different endpoint
+// (getNamespaceResources, single-namespace only) with richer fields
+// (qos/owner) that get_workloads_catalog's leaner _normalize_pod() doesn't
+// return (name/namespace/status/reason/ready "N/M"/restarts/node/
+// created_at only) -- this row is intentionally leaner to match what's
+// actually available here, not a straight copy of the old one.
+function podRows(items) {
+  return items.map((pod) => {
+    const isRunning = pod.status === "Running";
+    return h("div", { className: "pod-card-row card", style: "display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;box-shadow:var(--shadow-raised-sm);" }, [
       h("div", { style: "display:flex;align-items:center;gap:0.75rem;" }, [
-        h("span", {
-          style: "width:10px;height:10px;border-radius:50%;display:inline-block;background:" + (isRunning ? "var(--success)" : "var(--danger)")
-        }),
+        h("span", { style: `width:10px;height:10px;border-radius:50%;display:inline-block;background:${isRunning ? "var(--success)" : "var(--danger)"};` }),
         h("span", { style: "font-weight:700;font-family:var(--font-mono, monospace);font-size:0.95rem;color:var(--fg);" }, pod.name),
+        h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, pod.namespace),
       ]),
       h("div", { style: "display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;" }, [
-        pill(pod.status || pod.phase || "Running", isRunning ? "success" : "warning"),
-        pill(`${pod.ready_containers || 1}/${pod.total_containers || 1}`, "info"),
-        pill(`↺ ${pod.restarts || 0}`, "muted"),
-        pill(pod.qos || "Burstable", "secondary"),
-        pod.owner ? h("span", { className: "badge", style: "font-size:0.75rem;background:var(--bg-inset);color:var(--fg-muted);" }, pod.owner) : null,
+        pill(pod.reason || pod.status || "Unknown", isRunning ? "success" : "warning"),
+        pill(pod.ready || "0/0", "info"),
+        pod.restarts ? pill(`↺ ${pod.restarts}`, "muted") : null,
         pod.node ? h("span", { className: "badge", style: "font-size:0.75rem;background:var(--info-soft);color:var(--info);" }, pod.node) : null,
-        h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, pod.age || timeAgo(pod.created_at)),
-        h("button", {
-          className: "btn btn--primary btn--sm",
-          style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;",
-          onclick: () => openPodInspectorModal(pod.name, pod.namespace)
-        }, "Inspect"),
-        h("button", {
-          className: "btn btn--secondary btn--sm",
-          style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;color:var(--info);border-color:color-mix(in srgb, var(--info) 40%, transparent);",
-          onclick: () => openLogsModal(pod.name, pod.namespace)
-        }, "Logs"),
-        h("button", {
-          className: "btn btn--secondary btn--sm",
-          style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;",
-          onclick: () => openManifestModal("Pod", pod.name, pod.namespace)
-        }, "YAML"),
+        h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, timeAgo(pod.created_at)),
+        h("button", { className: "btn btn--primary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openPodInspectorModal(pod.name, pod.namespace) }, "Inspect"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;color:var(--info);border-color:color-mix(in srgb, var(--info) 40%, transparent);", onclick: () => openLogsModal(pod.name, pod.namespace) }, "Logs"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openManifestModal("Pod", pod.name, pod.namespace) }, "YAML"),
       ].filter(Boolean))
     ]);
   });
-
-  renderInto(container, h("div", { style: "display:flex;flex-direction:column;" }, rows));
 }
-
-// -- view: workload catalog ---------------------------------------------------
-// Deployments/StatefulSets/DaemonSets/Jobs/CronJobs used to be 5 separate
-// nav items and pages, each independently calling the exact same
-// getWorkloadsCatalog() endpoint and rendering one filtered slice of it.
-// Consolidated into one page with a type-filter chip row instead -- one
-// fetch, one place to look, same row renderers below.
-
-let catalogData = null;
-let catalogTypeFilter = "all";
 
 function deploymentRows(items) {
   return items.map((d) =>
@@ -1190,6 +1190,7 @@ function cronjobRows(items) {
 }
 
 const CATALOG_TYPES = [
+  { key: "pods", label: "Pods", dataKey: "pods", rowFn: podRows },
   { key: "deployments", label: "Deployments", dataKey: "deployments", rowFn: deploymentRows },
   { key: "statefulsets", label: "StatefulSets", dataKey: "statefulsets", rowFn: statefulsetRows },
   { key: "daemonsets", label: "DaemonSets", dataKey: "daemonsets", rowFn: daemonsetRows },
@@ -1198,54 +1199,62 @@ const CATALOG_TYPES = [
 ];
 
 function filterCatalogItems(items) {
-  const search = ($("catalog-search")?.value || "").toLowerCase();
+  const search = ($("workloads-catalog-search")?.value || "").toLowerCase();
   return (items || []).filter(
     (i) => (i.namespace || "") !== "kube-system" && (!search || i.name.toLowerCase().includes(search))
   );
 }
 
-function renderWorkloadCatalog() {
-  const container = $("catalog-content");
-  if (!catalogData) return;
-
-  const typesToShow = catalogTypeFilter === "all" ? CATALOG_TYPES : CATALOG_TYPES.filter((t) => t.key === catalogTypeFilter);
-  const sections = [];
-  let totalShown = 0;
-
-  for (const t of typesToShow) {
-    const items = filterCatalogItems(catalogData[t.dataKey]);
-    if (!items.length) continue;
-    totalShown += items.length;
-    sections.push(
-      h("div", { style: "display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1.25rem;" }, [
-        catalogTypeFilter === "all"
-          ? h("div", { style: "font-size:0.72rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.05em;" }, `${t.label} (${items.length})`)
-          : null,
-        ...t.rowFn(items),
-      ].filter(Boolean))
-    );
-  }
-
-  if (!totalShown) {
-    renderInto(container, emptyState("No workloads found", "No matching workloads in this namespace."));
-    return;
-  }
-  renderInto(container, h("div", {}, sections));
+// Fills workloads-catalog-panel's body for whichever type is currently
+// expanded. Only touches the body -- never the search input beside it in
+// the panel header -- so typing in that box doesn't lose focus per
+// keystroke (see the panel's static markup in index.html).
+function renderCatalogPanelBody() {
+  const type = CATALOG_TYPES.find((t) => t.key === catalogTypeFilter);
+  const titleEl = $("workloads-catalog-title");
+  const bodyEl = $("workloads-catalog-body");
+  if (!type || !catalogData || !bodyEl) return;
+  const items = filterCatalogItems(catalogData[type.dataKey]);
+  if (titleEl) titleEl.textContent = `${type.label} (${items.length})`;
+  renderInto(
+    bodyEl,
+    items.length ? h("div", {}, type.rowFn(items)) : emptyState("No workloads found", `No matching ${type.label.toLowerCase()} in this namespace.`)
+  );
 }
 
-async function loadWorkloadCatalog() {
-  const container = $("catalog-content");
-  const token = nextLoadToken("catalog");
-  renderInto(container, loadingSkeleton());
-  try {
-    const ns = $("catalog-namespace-select")?.value || undefined;
-    catalogData = await api.getWorkloadsCatalog(state.selectedClusterId, ns);
-    if (isStaleToken("catalog", token)) return;
-    renderWorkloadCatalog();
-  } catch (err) {
-    if (isStaleToken("catalog", token)) return;
-    renderInto(container, errorState(err, loadWorkloadCatalog));
+// Click handler for an Overview stat card (Deployments/StatefulSets/
+// DaemonSets/Jobs/CronJobs) -- opens/closes the inline catalog panel for
+// that type, matching the toggle behavior the old catalog-chips had.
+async function toggleWorkloadCatalogType(key) {
+  const panelEl = $("workloads-catalog-panel");
+  if (!panelEl) return;
+
+  if (catalogTypeFilter === key) {
+    catalogTypeFilter = null;
+    panelEl.hidden = true;
+    renderWorkloadStats(workloadsOverviewData);
+    return;
   }
+
+  catalogTypeFilter = key;
+  panelEl.hidden = false;
+  renderWorkloadStats(workloadsOverviewData); // reflect the newly-selected card immediately
+
+  const ns = $("workloads-namespace-select")?.value || undefined;
+  if (!catalogData || catalogDataNamespace !== ns) {
+    renderInto($("workloads-catalog-body"), loadingSkeleton(3));
+    const token = nextLoadToken("catalog");
+    try {
+      catalogData = await api.getWorkloadsCatalog(state.selectedClusterId, ns);
+      catalogDataNamespace = ns;
+    } catch (err) {
+      if (isStaleToken("catalog", token)) return;
+      renderInto($("workloads-catalog-body"), errorState(err, () => toggleWorkloadCatalogType(key)));
+      return;
+    }
+    if (isStaleToken("catalog", token)) return;
+  }
+  renderCatalogPanelBody();
 }
 
 function formatMemory(memStr) {
@@ -1431,6 +1440,7 @@ function radialGauge(pct, label, sub, baseColor) {
     class: "cmap-gauge__fill",
     cx: "32", cy: "32", r: String(r),
     stroke: color,
+    style: `color:${color};`, // so the CSS glow filter's currentColor matches this ring's stroke
     "stroke-dasharray": String(c),
     "stroke-dashoffset": String(c),
     "data-target-offset": String(c * (1 - clamped / 100)),
@@ -1448,11 +1458,17 @@ function radialGauge(pct, label, sub, baseColor) {
   ]);
 }
 
-// One directly-clickable chip per pod (click opens that pod's logs, same
-// as the original dot grid) -- tried an aggregate proportional bar first,
-// but that collapsed the whole point of this section: being able to see
-// and click each individual pod. Grouped under a namespace label row, chips
-// pop in with a staggered delay instead of appearing all at once.
+// Isometric cube glyph -- three rhombus faces (top/left/right) shaded via
+// opacity to read as a lit 3D box at a glance, even filled flat white at
+// ~12px. Drawn once and reused per pod tile rather than rebuilt each time.
+const POD_CUBE_ICON = `<svg viewBox="0 0 24 24" fill="white"><path d="M12 2 20 6.5 12 11 4 6.5Z" opacity="0.95"/><path d="M4 6.5 12 11 12 19 4 14.5Z" opacity="0.68"/><path d="M20 6.5 12 11 12 19 20 14.5Z" opacity="0.45"/></svg>`;
+
+// One directly-clickable tile per pod (click opens that pod's logs, same as
+// the original dot grid) -- tried an aggregate bar, then a repeated flat
+// shape (square, then diamond, then a bar-chart tick), but the ask was for
+// an actual 3D/gradient pod glyph, not another flat shape. Each tile is a
+// glossy gradient badge (like a provider badge) with the isometric cube
+// icon above inside, one per pod, grouped per namespace.
 function podChipsForNamespace(ns) {
   const podList = ns.pods && ns.pods.length ? ns.pods : null;
   const items = podList || Array.from({ length: ns.count || 0 });
@@ -1461,6 +1477,7 @@ function podChipsForNamespace(ns) {
     return h("span", {
       class: "cmap-pod-chip",
       style: `--chip-color:${ns.color};animation-delay:${Math.min(idx * 30, 300)}ms;`,
+      html: POD_CUBE_ICON,
       tabindex: podName ? "0" : "-1",
       onmouseenter: (e) => showCmapTooltip(e.clientX, e.clientY, "POD", podName || `${ns.namespace}-${idx + 1}`, [
         ["Namespace", ns.namespace],
@@ -2471,8 +2488,6 @@ const viewLoaders = {
   clusters: loadClustersView,
   applications: loadLogicalApplications,
   workloads: loadWorkloads,
-  "workload-catalog": loadWorkloadCatalog,
-  pods: loadPods,
   diagnostics: loadDiagnosticsRCA,
   audit: loadAuditLogsView,
   nodes: loadNodesView,
@@ -2508,17 +2523,12 @@ async function loadSidebarCounts() {
   if (!state.selectedClusterId) return;
   const clusterId = state.selectedClusterId;
   try {
-    const [workloadsResp, nodes] = await Promise.all([
-      api.getWorkloads(clusterId),
-      api.getNodes(clusterId),
-    ]);
+    // Used to also fetch getWorkloads() here for a Pods sidebar badge --
+    // Pods no longer has its own nav item (folded into Overview's stat
+    // cards, same as the other workload types), so that fetch is gone too.
+    const nodes = await api.getNodes(clusterId);
     if (state.selectedClusterId !== clusterId) return; // cluster changed mid-flight
-    const overview = workloadsResp.overview || {};
     setSidebarCount("count-nodes", nodes.count ?? nodes.items?.length);
-    setSidebarCount("count-pods", overview.pods?.total);
-    const catalogTotal = ["deployments", "statefulsets", "daemonsets", "jobs", "cronjobs"]
-      .reduce((sum, k) => sum + (overview[k]?.total || 0), 0);
-    setSidebarCount("count-catalog", catalogTotal);
   } catch (_) {
     // Sidebar counts are a nice-to-have, not worth surfacing an error banner for.
   }
@@ -2665,18 +2675,9 @@ function wireStaticControls() {
   $("cluster-select")?.addEventListener("change", onClusterChange);
 
   $("workloads-namespace-select")?.addEventListener("change", () => state.activeView === "workloads" && loadWorkloads());
-  $("pods-namespace-select")?.addEventListener("change", () => state.activeView === "pods" && loadPods());
-  $("pods-search")?.addEventListener("input", () => state.activeView === "pods" && loadPods());
-  $("catalog-namespace-select")?.addEventListener("change", () => state.activeView === "workload-catalog" && loadWorkloadCatalog());
   // Search filters the already-fetched catalogData client-side -- no refetch needed.
-  $("catalog-search")?.addEventListener("input", () => state.activeView === "workload-catalog" && renderWorkloadCatalog());
-  $("catalog-type-chips")?.addEventListener("click", (e) => {
-    const chip = e.target.closest(".catalog-chip");
-    if (!chip) return;
-    catalogTypeFilter = chip.dataset.type;
-    $("catalog-type-chips").querySelectorAll(".catalog-chip").forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
-    renderWorkloadCatalog();
-  });
+  $("workloads-catalog-search")?.addEventListener("input", () => state.activeView === "workloads" && catalogTypeFilter && renderCatalogPanelBody());
+  $("workloads-catalog-close")?.addEventListener("click", () => catalogTypeFilter && toggleWorkloadCatalogType(catalogTypeFilter));
   $("applications-namespace-select")?.addEventListener("change", () => state.activeView === "applications" && loadLogicalApplications());
   $("diagnostics-reanalyze-btn")?.addEventListener("click", () => state.activeView === "diagnostics" && loadDiagnosticsRCA());
   $("audit-type-select")?.addEventListener("change", () => state.activeView === "audit" && loadAuditLogsView());
