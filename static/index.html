@@ -50,7 +50,7 @@
 
       <div class="topbar__main">
         <div class="topbar__selectors" id="topbar-active-info" style="display:flex;align-items:center;gap:10px;">
-          <div style="display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:10px;background:var(--bg-inset);border:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:10px;background:var(--bg-inset);border:1px solid var(--border);box-shadow:var(--shadow-xs);">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             <span id="topbar-cluster-name" style="font-size:0.85rem;font-weight:700;color:var(--fg);">—</span>
           </div>
@@ -96,12 +96,13 @@
           </div>
           <button id="view-all-clusters-btn" type="button" style="
             width:100%;margin-top:6px;padding:7px 10px;border-radius:10px;
-            border:1.5px solid var(--border);background:var(--bg-inset);
+            border:1.5px solid var(--border);background:var(--grad-btn);
+            box-shadow:var(--shadow-xs);
             color:var(--fg-muted);font-size:0.75rem;font-weight:600;
             cursor:pointer;display:flex;align-items:center;justify-content:space-between;
             transition:all 150ms;font-family:inherit;outline:none;
-          " onmouseenter="this.style.background='var(--bg-hover)';this.style.borderColor='var(--accent)';this.style.color='var(--fg)'"
-            onmouseleave="this.style.background='var(--bg-inset)';this.style.borderColor='var(--border)';this.style.color='var(--fg-muted)'">
+          " onmouseenter="this.style.background='var(--grad-btn-hover)';this.style.borderColor='var(--accent)';this.style.color='var(--fg)';this.style.boxShadow='var(--shadow-raised-sm)'"
+            onmouseleave="this.style.background='var(--grad-btn)';this.style.borderColor='var(--border)';this.style.color='var(--fg-muted)';this.style.boxShadow='var(--shadow-xs)'">
             <span style="display:flex;align-items:center;gap:6px;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
               <span id="view-all-clusters-text">View All Clusters</span>
@@ -121,14 +122,13 @@
             <svg class="icon nav-group__caret" viewBox="0 0 24 24" style="width:14px;height:14px;transition:transform 0.2s;"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <div class="nav-group__items" style="display:flex;flex-direction:column;gap:2px;padding-left:0.75rem;margin-top:2px;">
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="fleet" aria-selected="false">Fleet Overview</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="overview" aria-selected="true">Cluster Overview</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="overview" aria-selected="true"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="8" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Cluster Overview</button>
             <button class="sidebar-item nav-tabs__item" role="tab" data-view="nodes" aria-selected="false" style="justify-content:space-between;">
-              <span>Nodes</span>
+              <span style="display:flex;align-items:center;gap:6px;"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="2" y="3" width="20" height="6" rx="1.5"/><rect x="2" y="15" width="20" height="6" rx="1.5"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>Nodes</span>
               <span class="sidebar-item__count" id="count-nodes"></span>
             </button>
             <button class="sidebar-item nav-tabs__item" role="tab" data-view="namespaces" aria-selected="false" style="justify-content:space-between;">
-              <span>Namespaces</span>
+              <span style="display:flex;align-items:center;gap:6px;"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>Namespaces</span>
               <span class="sidebar-item__count" id="count-namespaces"></span>
             </button>
           </div>
@@ -144,15 +144,15 @@
             <svg class="icon nav-group__caret" viewBox="0 0 24 24" style="width:14px;height:14px;transition:transform 0.2s;"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <div class="nav-group__items" style="display:flex;flex-direction:column;gap:2px;padding-left:0.75rem;margin-top:2px;">
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="applications" aria-selected="false">Applications</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="map" aria-selected="false">Cluster Map</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="workloads" aria-selected="false">Overview</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="applications" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Applications</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="map" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="M9 3 3 5v16l6-2 6 2 6-2V3l-6 2-6-2z"/><path d="M9 3v16M15 5v16"/></svg>Cluster Map</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="workloads" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>Overview</button>
             <button class="sidebar-item nav-tabs__item" role="tab" data-view="workload-catalog" aria-selected="false" style="justify-content:space-between;">
-              <span>Workload Catalog</span>
+              <span style="display:flex;align-items:center;gap:6px;"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>Workload Catalog</span>
               <span class="sidebar-item__count" id="count-catalog"></span>
             </button>
             <button class="sidebar-item nav-tabs__item" role="tab" data-view="pods" aria-selected="false" style="justify-content:space-between;">
-              <span>Pods</span>
+              <span style="display:flex;align-items:center;gap:6px;"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="6" y="6" width="12" height="12" rx="2" transform="rotate(45 12 12)"/></svg>Pods</span>
               <span class="sidebar-item__count" id="count-pods"></span>
             </button>
           </div>
@@ -168,9 +168,9 @@
             <svg class="icon nav-group__caret" viewBox="0 0 24 24" style="width:14px;height:14px;transition:transform 0.2s;"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <div class="nav-group__items" style="display:flex;flex-direction:column;gap:2px;padding-left:0.75rem;margin-top:2px;">
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="diagnostics" aria-selected="false">AI Diagnostics (RCA)</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="audit" aria-selected="false">Audit &amp; Timeline</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="events" aria-selected="false">K8s Events</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="diagnostics" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="M12 2a4 4 0 0 1 4 4v1a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6a4 4 0 0 1 4-4Z"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>AI Diagnostics (RCA)</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="audit" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Audit &amp; Timeline</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="events" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>K8s Events</button>
           </div>
         </div>
 
@@ -184,9 +184,9 @@
             <svg class="icon nav-group__caret" viewBox="0 0 24 24" style="width:14px;height:14px;transition:transform 0.2s;"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <div class="nav-group__items" style="display:flex;flex-direction:column;gap:2px;padding-left:0.75rem;margin-top:2px;">
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="resourcemap" aria-selected="false">Resource Map</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="network" aria-selected="false">Network</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="storage" aria-selected="false">Storage</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="resourcemap" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="9" y="15" width="6" height="6" rx="1"/><path d="M7 10v1.5a1.5 1.5 0 0 0 1.5 1.5H10M17 10v1.5a1.5 1.5 0 0 1-1.5 1.5H14"/></svg>Resource Map</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="network" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.5 16.43a6 6 0 0 1 7 0"/><path d="M2 8.82a16 16 0 0 1 20 0"/><circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/></svg>Network</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="storage" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>Storage</button>
           </div>
         </div>
 
@@ -252,11 +252,11 @@
         </div>
         <div id="catalog-type-chips" role="tablist" aria-label="Workload type filter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1rem;">
           <button type="button" class="catalog-chip" data-type="all" aria-pressed="true">All</button>
-          <button type="button" class="catalog-chip" data-type="deployments" aria-pressed="false">Deployments</button>
-          <button type="button" class="catalog-chip" data-type="statefulsets" aria-pressed="false">StatefulSets</button>
-          <button type="button" class="catalog-chip" data-type="daemonsets" aria-pressed="false">DaemonSets</button>
-          <button type="button" class="catalog-chip" data-type="jobs" aria-pressed="false">Jobs</button>
-          <button type="button" class="catalog-chip" data-type="cronjobs" aria-pressed="false">CronJobs</button>
+          <button type="button" class="catalog-chip" data-type="deployments" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg>Deployments</button>
+          <button type="button" class="catalog-chip" data-type="statefulsets" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>StatefulSets</button>
+          <button type="button" class="catalog-chip" data-type="daemonsets" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>DaemonSets</button>
+          <button type="button" class="catalog-chip" data-type="jobs" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 6 12 12 16 14"/></svg>Jobs</button>
+          <button type="button" class="catalog-chip" data-type="cronjobs" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><polyline points="12 9 12 12 14 13.5"/><path d="M12 2v2M12 20v2"/></svg>CronJobs</button>
         </div>
         <div id="catalog-content"></div>
       </section>
@@ -327,13 +327,13 @@
           </div>
           <!-- Color Legend -->
           <div class="resourcemap-legend" style="display:flex;align-items:center;gap:12px;font-size:0.75rem;font-weight:600;color:var(--fg-muted);flex-wrap:wrap;">
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#3b82f6;"></span>Deployment</span>
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#10b981;"></span>Service</span>
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#06b6d4;"></span>Pod</span>
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#6b7280;"></span>ConfigMap</span>
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#ec4899;"></span>Secret</span>
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#f97316;"></span>PVC</span>
-            <span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:#8b5cf6;"></span>Route / Gateway</span>
+            <span style="display:flex;align-items:center;gap:5px;color:#3b82f6;"><svg width="13" height="13" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg><span style="color:var(--fg-muted);">Deployment</span></span>
+            <span style="display:flex;align-items:center;gap:5px;color:#10b981;"><svg width="13" height="13" viewBox="0 0 24 24"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" fill="none" stroke="currentColor" stroke-width="2"/></svg><span style="color:var(--fg-muted);">Service</span></span>
+            <span style="display:flex;align-items:center;gap:5px;color:#06b6d4;"><svg width="13" height="13" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" transform="rotate(45 12 12)" fill="currentColor"/></svg><span style="color:var(--fg-muted);">Pod</span></span>
+            <span style="display:flex;align-items:center;gap:5px;color:#6b7280;"><svg width="13" height="13" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><line x1="8" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="2"/><line x1="8" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="2"/></svg><span style="color:var(--fg-muted);">ConfigMap</span></span>
+            <span style="display:flex;align-items:center;gap:5px;color:#ec4899;"><svg width="13" height="13" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg><span style="color:var(--fg-muted);">Secret</span></span>
+            <span style="display:flex;align-items:center;gap:5px;color:#f97316;"><svg width="13" height="13" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" fill="none" stroke="currentColor" stroke-width="2"/></svg><span style="color:var(--fg-muted);">PVC</span></span>
+            <span style="display:flex;align-items:center;gap:5px;color:#8b5cf6;"><svg width="13" height="13" viewBox="0 0 24 24"><path d="M17 3v4M17 7l-4-4M17 7l4-4M7 21v-4M7 17l-4 4M7 17l4 4" stroke="currentColor" stroke-width="2" fill="none"/><path d="M7 17h6a4 4 0 0 0 4-4V7" fill="none" stroke="currentColor" stroke-width="2"/></svg><span style="color:var(--fg-muted);">Route / Gateway</span></span>
           </div>
         </div>
 
@@ -402,23 +402,6 @@
         </div>
         <p class="view-header__meta" style="margin-bottom:var(--space-3);">StorageClass → PV → PVC → Pod</p>
         <div id="storage-topology-content"></div>
-      </section>
-
-      <!-- Fleet Overview View -->
-      <section id="view-fleet" class="view" data-view="fleet" hidden>
-        <div class="view-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
-          <div>
-            <h2 style="font-size:1.3rem;font-weight:700;margin:0;">Multi-Cluster Fleet Intelligence</h2>
-            <span class="view-header__meta" style="font-size:0.82rem;color:var(--fg-subtle);margin-top:2px;display:block;">Unified multi-cloud cluster topology, health scores, node/pod capacities & cross-cluster alerts</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <button id="fleet-refresh-btn" type="button" class="btn btn--secondary" style="font-size:0.82rem;padding:6px 12px;display:flex;align-items:center;gap:6px;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
-              Refresh Fleet
-            </button>
-          </div>
-        </div>
-        <div id="fleet-content"></div>
       </section>
 
       <!-- Logical Applications View -->
@@ -669,7 +652,7 @@
   <!-- ===== ALL CLUSTERS MANAGER MODAL ===== -->
   <dialog id="clusters-modal" style="
     border:none; border-radius:20px; padding:0; background:var(--bg-elevated);
-    box-shadow:0 24px 64px rgba(32,33,36,.4); max-width:620px; width:95%;
+    box-shadow:var(--shadow-lg); max-width:620px; width:95%;
     color:var(--fg); font-family:var(--font-ui);
   ">
     <!-- Header -->
@@ -681,9 +664,9 @@
       <div style="display:flex;align-items:center;gap:8px;">
         <button id="clusters-modal-add-btn" type="button" style="
           display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:10px;
-          border:none;background:var(--accent);color:#fff;font-size:0.8rem;font-weight:600;
-          cursor:pointer;font-family:inherit;transition:opacity 150ms;
-        " onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">
+          border:none;background:var(--grad-btn-primary);color:#fff;font-size:0.8rem;font-weight:600;
+          cursor:pointer;font-family:inherit;box-shadow:var(--shadow-raised-sm);transition:opacity 150ms,box-shadow 150ms;
+        " onmouseenter="this.style.opacity='0.9';this.style.boxShadow='var(--shadow-raised-md)'" onmouseleave="this.style.opacity='1';this.style.boxShadow='var(--shadow-raised-sm)'">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
           Add Cluster
         </button>
@@ -704,6 +687,7 @@
         <input type="text" id="clusters-search-input" placeholder="Search clusters by name, environment, provider..." style="
           width:100%;padding:9px 12px 9px 36px;border:1.5px solid var(--border);border-radius:10px;
           background:var(--bg-inset);color:var(--fg);font-size:0.85rem;font-family:inherit;outline:none;
+          box-shadow:var(--shadow-inset);
           transition:border-color 150ms;
         " onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" />
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--fg-subtle);">
@@ -721,7 +705,7 @@
   <!-- ===== REGISTER CLUSTER MODAL ===== -->
   <dialog id="onboard-modal" style="
     border:none; border-radius:20px; padding:0; background:var(--bg-elevated);
-    box-shadow:0 24px 64px rgba(32,33,36,.4); max-width:520px; width:95%;
+    box-shadow:var(--shadow-lg); max-width:520px; width:95%;
     color:var(--fg); font-family:var(--font-ui);
     animation: none;
   ">
@@ -752,7 +736,7 @@
             padding:10px 6px;border-radius:12px;border:1.5px solid var(--accent);
             background:var(--accent-soft);cursor:pointer;transition:all 150ms;
           ">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4285F4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#4285F4"><path d="M12.19 2.38a9.344 9.344 0 0 0-9.234 6.893c.053-.02-.055.013 0 0-3.875 2.551-3.922 8.11-.247 10.941l.006-.007-.007.03a6.717 6.717 0 0 0 4.077 1.356h5.173l.03.03h5.192c6.687.053 9.376-8.605 3.835-12.35a9.365 9.365 0 0 0-2.821-4.552l-.043.043.006-.05A9.344 9.344 0 0 0 12.19 2.38zm-.358 4.146c1.244-.04 2.518.368 3.486 1.15a5.186 5.186 0 0 1 1.862 4.078v.518c3.53-.07 3.53 5.262 0 5.193h-5.193l-.008.009v-.04H6.785a2.59 2.59 0 0 1-1.067-.23h.001a2.597 2.597 0 1 1 3.437-3.437l3.013-3.012A6.747 6.747 0 0 0 8.11 8.24c.018-.01.04-.026.054-.023a5.186 5.186 0 0 1 3.67-1.69z"/></svg>
             <span style="font-size:0.7rem;font-weight:600;color:var(--accent);">GCP GKE</span>
           </button>
           <button type="button" class="provider-tab" data-provider="eks" aria-pressed="false" style="
@@ -760,7 +744,7 @@
             padding:10px 6px;border-radius:12px;border:1.5px solid var(--border);
             background:transparent;cursor:pointer;transition:all 150ms;
           ">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF9900" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            <svg width="20" height="15" viewBox="-0.5 13 25.3 6.8" fill="#FF9900"><path d="M21.698 16.207c-2.626 1.94-6.442 2.969-9.722 2.969-4.598 0-8.74-1.7-11.87-4.526-.247-.223-.024-.527.272-.351 3.384 1.963 7.559 3.153 11.877 3.153 2.914 0 6.114-.607 9.06-1.852.439-.2.814.287.383.607zM22.792 14.961c-.336-.43-2.22-.207-3.074-.103-.255.032-.295-.192-.063-.36 1.5-1.053 3.967-.75 4.254-.399.287.36-.08 2.826-1.485 4.007-.215.184-.423.088-.327-.151.32-.79 1.03-2.57.695-2.994z"/></svg>
             <span style="font-size:0.7rem;font-weight:600;color:var(--fg-muted);">AWS EKS</span>
           </button>
           <button type="button" class="provider-tab" data-provider="aks" aria-pressed="false" style="
@@ -768,7 +752,7 @@
             padding:10px 6px;border-radius:12px;border:1.5px solid var(--border);
             background:transparent;cursor:pointer;transition:all 150ms;
           ">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0078D4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 19 2 19"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#0078D4"><path d="M22.379 23.343a1.62 1.62 0 0 0 1.536-2.14v.002L17.35 1.76A1.62 1.62 0 0 0 15.816.657H8.184A1.62 1.62 0 0 0 6.65 1.76L.086 21.204a1.62 1.62 0 0 0 1.536 2.139h4.741a1.62 1.62 0 0 0 1.535-1.103l.977-2.892 4.947 3.675c.28.208.618.32.966.32m-3.084-12.531 3.624 10.739a.54.54 0 0 1-.51.713v-.001h-.03a.54.54 0 0 1-.322-.106l-9.287-6.9h4.853m6.313 7.006c.116-.326.13-.694.007-1.058L9.79 1.76a1.722 1.722 0 0 0-.007-.02h6.034a.54.54 0 0 1 .512.366l6.562 19.445a.54.54 0 0 1-.338.684"/></svg>
             <span style="font-size:0.7rem;font-weight:600;color:var(--fg-muted);">Azure AKS</span>
           </button>
           <button type="button" class="provider-tab" data-provider="local" aria-pressed="false" style="
@@ -807,7 +791,7 @@
               display:flex;align-items:center;justify-content:center;
               padding:8px 12px;border-radius:99px;font-size:0.8rem;font-weight:600;
               border:1.5px solid var(--border);transition:all 150ms;cursor:pointer;
-              background:var(--info-soft);border-color:var(--info);color:var(--info);
+              background:linear-gradient(180deg, var(--bg-elevated) 0%, var(--info-soft) 100%);border-color:var(--info);color:var(--info);
             ">Sandbox</span>
           </label>
           <label style="cursor:pointer;flex:1;">
@@ -960,11 +944,12 @@
             " onfocus="this.style.borderColor='#188038'" onblur="this.style.borderColor='var(--border)'" />
             <button type="button" id="local-parse-btn" style="
               padding:9px 14px;border:1.5px solid #188038;border-radius:10px;
-              background:color-mix(in srgb,#188038 12%,var(--bg-elevated));
+              background:linear-gradient(180deg, color-mix(in srgb,#188038 18%,var(--bg-elevated)) 0%, color-mix(in srgb,#188038 8%,var(--bg-elevated)) 100%);
               color:#188038;font-size:0.8rem;font-weight:600;cursor:pointer;
-              white-space:nowrap;font-family:inherit;transition:background 150ms;
-            " onmouseenter="this.style.background='color-mix(in srgb,#188038 22%,var(--bg-elevated))'"
-              onmouseleave="this.style.background='color-mix(in srgb,#188038 12%,var(--bg-elevated))'">
+              box-shadow:var(--shadow-xs);
+              white-space:nowrap;font-family:inherit;transition:background 150ms,box-shadow 150ms;
+            " onmouseenter="this.style.background='linear-gradient(180deg, color-mix(in srgb,#188038 28%,var(--bg-elevated)) 0%, color-mix(in srgb,#188038 16%,var(--bg-elevated)) 100%)';this.style.boxShadow='var(--shadow-raised-sm)'"
+              onmouseleave="this.style.background='linear-gradient(180deg, color-mix(in srgb,#188038 18%,var(--bg-elevated)) 0%, color-mix(in srgb,#188038 8%,var(--bg-elevated)) 100%)';this.style.boxShadow='var(--shadow-xs)'">
               Scan File
             </button>
           </div>
@@ -992,19 +977,19 @@
     <div style="display:flex;justify-content:flex-end;gap:8px;padding:1rem 1.5rem;border-top:1px solid var(--border);">
       <button id="onboard-modal-cancel" type="button" style="
         padding:9px 18px;border:1.5px solid var(--border);border-radius:10px;
-        background:transparent;color:var(--fg-muted);font-size:0.88rem;font-weight:600;
-        cursor:pointer;font-family:inherit;transition:background 150ms,color 150ms;
-      " onmouseenter="this.style.background='var(--bg-hover)';this.style.color='var(--fg)'"
-        onmouseleave="this.style.background='transparent';this.style.color='var(--fg-muted)'">
+        background:var(--grad-btn);color:var(--fg-muted);font-size:0.88rem;font-weight:600;
+        cursor:pointer;font-family:inherit;box-shadow:var(--shadow-xs);transition:background 150ms,color 150ms,box-shadow 150ms;
+      " onmouseenter="this.style.background='var(--grad-btn-hover)';this.style.color='var(--fg)';this.style.boxShadow='var(--shadow-raised-sm)'"
+        onmouseleave="this.style.background='var(--grad-btn)';this.style.color='var(--fg-muted)';this.style.boxShadow='var(--shadow-xs)'">
         Cancel
       </button>
       <button id="onboard-save-btn" type="button" style="
         padding:9px 22px;border:none;border-radius:10px;
-        background:var(--accent);color:#fff;font-size:0.88rem;font-weight:600;
+        background:var(--grad-btn-primary);color:#fff;font-size:0.88rem;font-weight:600;
         cursor:pointer;font-family:inherit;
-        box-shadow:0 1px 3px rgba(26,115,232,.4);transition:background 150ms,box-shadow 150ms;
-      " onmouseenter="this.style.background='color-mix(in srgb,var(--accent) 85%,#000)'"
-        onmouseleave="this.style.background='var(--accent)'">
+        box-shadow:0 1px 3px rgba(26,115,232,.4),var(--shadow-raised-sm);transition:background 150ms,box-shadow 150ms;
+      " onmouseenter="this.style.background='var(--grad-btn-primary-hover)';this.style.boxShadow='0 1px 3px rgba(26,115,232,.4),var(--shadow-raised-md)'"
+        onmouseleave="this.style.background='var(--grad-btn-primary)';this.style.boxShadow='0 1px 3px rgba(26,115,232,.4),var(--shadow-raised-sm)'">
         Add Cluster
       </button>
     </div>

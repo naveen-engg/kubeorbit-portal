@@ -5,6 +5,14 @@
 @import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500;700&display=swap');
 
 :root {
+  /* Tells the browser which palette to use for chrome it renders itself --
+     native <select> dropdown popups, scrollbars, date/time pickers, form
+     control focus rings -- since none of that is reachable with ordinary
+     CSS. Without this, a dark-themed page still gets Chromium's *light*
+     native popups (exactly the washed-out white dropdown-list bug this
+     fixes), because the browser has no signal the page went dark. */
+  color-scheme: light;
+
   /* Surfaces — tonal layering (M3 elevation model). Light mode is the
      secondary theme now (dark is the default -- see initTheme() in app.js),
      but still needs real separation between layers when chosen: the
@@ -51,25 +59,48 @@
   --color-accent:     var(--accent);
   --color-fg:         var(--fg);
 
-  /* Material You elevation shadows */
-  --shadow-xs:        0 1px 2px rgba(60,64,67,.15), 0 1px 3px 1px rgba(60,64,67,.1);
-  --shadow-raised-sm: 0 1px 2px rgba(60,64,67,.2), 0 2px 6px 2px rgba(60,64,67,.12);
-  --shadow-raised-md: 0 4px 8px 3px rgba(60,64,67,.1), 0 1px 3px rgba(60,64,67,.15);
-  --shadow-raised-lg: 0 6px 10px 4px rgba(60,64,67,.1), 0 2px 3px rgba(60,64,67,.15);
-  --shadow-inset:     inset 0 2px 6px rgba(60,64,67,.1);
-  --shadow-lg:        0 24px 48px rgba(32,33,36,.32);
+  /* Neumorphic (soft-UI) elevation -- dual-tone shadows: a light "catch"
+     on the top-left edge plus a soft dark "cast" shadow bottom-right, so
+     raised surfaces read as gently extruded off the page rather than flat
+     rectangles with a drop shadow. Values are intentionally soft/low-alpha
+     (the "evolved soft-UI" variant, not textbook monochrome neumorphism --
+     pure neumorphism's low-contrast shadow-only edges fail WCAG contrast
+     checks, so real borders/tonal surfaces stay in place underneath this). */
+  --neu-hi:  rgba(255,255,255,.9);
+  --neu-lo:  rgba(163,177,198,.28);
+  --neu-hi-strong: rgba(255,255,255,1);
+  --neu-lo-strong: rgba(163,177,198,.4);
+  --shadow-xs:        -1px -1px 3px var(--neu-hi), 1px 2px 6px var(--neu-lo);
+  --shadow-raised-sm: -1px -1px 5px var(--neu-hi), 2px 3px 11px var(--neu-lo);
+  --shadow-raised-md: -2px -2px 8px var(--neu-hi), 3px 5px 16px var(--neu-lo);
+  --shadow-raised-lg: -3px -3px 12px var(--neu-hi), 5px 8px 24px var(--neu-lo-strong);
+  --shadow-inset:     inset 1px 1px 4px var(--neu-lo), inset -1px -1px 4px var(--neu-hi);
+  --shadow-pressed:   inset 2px 2px 6px var(--neu-lo-strong), inset -2px -2px 6px var(--neu-hi-strong);
+  --shadow-lg:        -4px -4px 16px var(--neu-hi), 8px 12px 34px var(--neu-lo-strong);
 
   /* Gradients */
   --grad-surface:       linear-gradient(180deg,#FFFFFF 0%,#F8FAFD 100%);
   --grad-header:        linear-gradient(180deg,#FFFFFF 0%,#FAFCFF 100%);
   --grad-accent:        linear-gradient(135deg,#1A73E8,#0D9488);
   --grad-accent-strong: linear-gradient(135deg,#1A73E8 0%,#1565C0 60%,#0D9488 100%);
+  /* Glossy "selected pill" fill -- light catching the top, tinting toward
+     the accent at the bottom, the look a raised segmented-control option
+     should have (picked over the chamfered/pressed treatment tried first). */
+  --grad-pill-selected: linear-gradient(180deg, var(--bg-elevated) 0%, var(--accent-soft) 100%);
+  /* Button gradients -- every button gets a glossy top-lit fill instead of a
+     flat color, same light-catches-the-top logic as the selected pill. */
+  --grad-btn:         linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 100%, white 8%) 0%, var(--bg-elevated) 100%);
+  --grad-btn-hover:   linear-gradient(180deg, var(--bg-hover) 0%, color-mix(in srgb, var(--bg-hover) 100%, black 4%) 100%);
+  --grad-btn-primary:       linear-gradient(180deg, color-mix(in srgb, var(--accent) 100%, white 22%) 0%, var(--accent) 100%);
+  --grad-btn-primary-hover: linear-gradient(180deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 100%, black 15%) 100%);
+  --grad-btn-danger:        linear-gradient(180deg, color-mix(in srgb, var(--danger) 100%, white 22%) 0%, var(--danger) 100%);
+  --grad-btn-danger-hover:  linear-gradient(180deg, var(--danger) 0%, color-mix(in srgb, var(--danger) 100%, black 15%) 100%);
 
   /* Provider */
   --provider-gke:   #4285F4;  --provider-gke-2: #34A853;
   --provider-eks:   #FF9900;  --provider-eks-2: #EC7211;
   --provider-aks:   #0078D4;  --provider-aks-2: #50E6FF;
-  --provider-local: #188038;
+  --provider-local: #188038;  --provider-local-2: #0F5C28;
 
   /* Typography — Google Sans */
   --font-ui:   'Google Sans', 'Roboto', system-ui, sans-serif;
@@ -96,6 +127,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg:          #0F1117;
     --bg-elevated: #1A1F2E;
     --bg-inset:    #141929;
@@ -122,18 +154,28 @@
     --ring:         #8AB4F8;
     --overlay:      rgba(0,0,0,.64);
     --color-accent: var(--accent);
-    --shadow-xs:        0 1px 3px rgba(0,0,0,.4), 0 1px 4px 1px rgba(0,0,0,.3);
-    --shadow-raised-sm: 0 2px 4px rgba(0,0,0,.45), 0 3px 8px rgba(0,0,0,.3);
-    --shadow-raised-md: 0 4px 10px rgba(0,0,0,.5), 0 2px 4px rgba(0,0,0,.3);
-    --shadow-raised-lg: 0 8px 16px rgba(0,0,0,.5), 0 4px 6px rgba(0,0,0,.3);
-    --shadow-inset:     inset 0 2px 6px rgba(0,0,0,.3);
-    --shadow-lg:        0 24px 64px rgba(0,0,0,.64);
+    /* Dark-theme neumorphism: the "highlight" is a faint lift (never a
+       glow-white), the "shadow" leans on near-black -- extruded surfaces
+       read as a slightly lighter facet catching light against a receding
+       dark cast, matching how soft-UI depth actually reads on near-black. */
+    --neu-hi:  rgba(255,255,255,.05);
+    --neu-lo:  rgba(0,0,0,.4);
+    --neu-hi-strong: rgba(255,255,255,.09);
+    --neu-lo-strong: rgba(0,0,0,.55);
+    --shadow-xs:        -1px -1px 3px var(--neu-hi), 1px 2px 6px var(--neu-lo);
+    --shadow-raised-sm: -1px -1px 5px var(--neu-hi), 2px 3px 11px var(--neu-lo);
+    --shadow-raised-md: -2px -2px 8px var(--neu-hi), 3px 5px 16px var(--neu-lo);
+    --shadow-raised-lg: -3px -3px 12px var(--neu-hi), 5px 8px 24px var(--neu-lo-strong);
+    --shadow-inset:     inset 1px 1px 4px var(--neu-lo), inset -1px -1px 4px var(--neu-hi);
+    --shadow-pressed:   inset 2px 2px 6px var(--neu-lo-strong), inset -2px -2px 6px var(--neu-hi-strong);
+    --shadow-lg:        -4px -4px 16px var(--neu-hi), 8px 12px 34px var(--neu-lo-strong);
     --grad-surface: linear-gradient(180deg,#1A1F2E 0%,#141929 100%);
     --grad-header:  linear-gradient(180deg,#1A1F2E 0%,#141929 100%);
   }
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg:          #0F1117;
   --bg-elevated: #1A1F2E;
   --bg-inset:    #141929;
@@ -160,12 +202,17 @@
   --ring:         #8AB4F8;
   --overlay:      rgba(0,0,0,.64);
   --color-accent: var(--accent);
-  --shadow-xs:        0 1px 3px rgba(0,0,0,.4), 0 1px 4px 1px rgba(0,0,0,.3);
-  --shadow-raised-sm: 0 2px 4px rgba(0,0,0,.45), 0 3px 8px rgba(0,0,0,.3);
-  --shadow-raised-md: 0 4px 10px rgba(0,0,0,.5), 0 2px 4px rgba(0,0,0,.3);
-  --shadow-raised-lg: 0 8px 16px rgba(0,0,0,.5), 0 4px 6px rgba(0,0,0,.3);
-  --shadow-inset:     inset 0 2px 6px rgba(0,0,0,.3);
-  --shadow-lg:        0 24px 64px rgba(0,0,0,.64);
+  --neu-hi:  rgba(255,255,255,.05);
+  --neu-lo:  rgba(0,0,0,.4);
+  --neu-hi-strong: rgba(255,255,255,.09);
+  --neu-lo-strong: rgba(0,0,0,.55);
+  --shadow-xs:        -1px -1px 3px var(--neu-hi), 1px 2px 6px var(--neu-lo);
+  --shadow-raised-sm: -1px -1px 5px var(--neu-hi), 2px 3px 11px var(--neu-lo);
+  --shadow-raised-md: -2px -2px 8px var(--neu-hi), 3px 5px 16px var(--neu-lo);
+  --shadow-raised-lg: -3px -3px 12px var(--neu-hi), 5px 8px 24px var(--neu-lo-strong);
+  --shadow-inset:     inset 1px 1px 4px var(--neu-lo), inset -1px -1px 4px var(--neu-hi);
+  --shadow-pressed:   inset 2px 2px 6px var(--neu-lo-strong), inset -2px -2px 6px var(--neu-hi-strong);
+  --shadow-lg:        -4px -4px 16px var(--neu-hi), 8px 12px 34px var(--neu-lo-strong);
   --grad-surface: linear-gradient(180deg,#1A1F2E 0%,#141929 100%);
   --grad-header:  linear-gradient(180deg,#1A1F2E 0%,#141929 100%);
 }
@@ -221,6 +268,10 @@ strong, b { font-weight: 700; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes fade-in-up { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes pop-in { from { opacity: 0; transform: translateY(10px) scale(0.94); } to { opacity: 1; transform: none; } }
+/* Same pop-in, but for an element whose resting transform is rotate(45deg)
+   (the Cluster Map's diamond pod chips) -- ending at "none" like the plain
+   pop-in would snap it back to square the instant the animation finishes. */
+@keyframes pop-in-diamond { from { opacity: 0; transform: rotate(45deg) scale(0.4); } to { opacity: 1; transform: rotate(45deg) scale(1); } }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @keyframes modal-in { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: none; } }
 /* Opacity + a small translateY only -- no scale. Scale would recompute
@@ -369,7 +420,7 @@ strong, b { font-weight: 700; }
   padding: 0 var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--grad-btn);
   color: var(--fg);
   font-weight: 500;
   cursor: pointer;
@@ -377,6 +428,7 @@ strong, b { font-weight: 700; }
   transition: background var(--transition-fast), border-color var(--transition-fast),
               transform var(--transition-fast), box-shadow var(--transition-fast);
 }
+.select:focus-visible, .btn:focus-visible { outline-offset: -3px; }
 .select { min-width: 150px; appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%235F6368' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m1 1 5 5 5-5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -386,12 +438,21 @@ strong, b { font-weight: 700; }
 [data-theme="dark"] .select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%239AA0B0' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m1 1 5 5 5-5'/%3E%3C/svg%3E");
 }
-.select:hover, .btn:hover { background: var(--bg-hover); border-color: var(--border-strong); box-shadow: var(--shadow-raised-md); }
-.select:active, .btn:active { transform: scale(.99); box-shadow: var(--shadow-xs); }
-.btn--primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; letter-spacing: .01em; }
-.btn--primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); box-shadow: var(--shadow-raised-md); }
-.btn--danger { background: var(--danger); border-color: transparent; color: #fff; font-weight: 600; }
-.btn--danger:hover { filter: brightness(.92); }
+/* Belt-and-suspenders alongside `color-scheme` above: Chromium also honors
+   an explicit background/color set directly on <option> for the native
+   popup list, so this covers browsers that don't fully key off color-scheme
+   for that specific part of the control. */
+select, .select { color-scheme: inherit; }
+select option, .select option {
+  background-color: var(--bg-elevated);
+  color: var(--fg);
+}
+.select:hover, .btn:hover { background: var(--grad-btn-hover); border-color: var(--border-strong); box-shadow: var(--shadow-raised-md); }
+.select:active, .btn:active { transform: scale(.99); box-shadow: var(--shadow-pressed); }
+.btn--primary { background: var(--grad-btn-primary); border-color: transparent; color: var(--accent-fg); font-weight: 600; letter-spacing: .01em; }
+.btn--primary:hover { background: var(--grad-btn-primary-hover); box-shadow: var(--shadow-raised-md); }
+.btn--danger { background: var(--grad-btn-danger); border-color: transparent; color: #fff; font-weight: 600; }
+.btn--danger:hover { background: var(--grad-btn-danger-hover); box-shadow: var(--shadow-raised-md); }
 .btn--ghost { background: transparent; box-shadow: none; border-color: transparent; }
 .btn--ghost:hover { background: var(--bg-hover); box-shadow: none; }
 .btn--icon { width: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -420,12 +481,15 @@ strong, b { font-weight: 700; }
 .badge__icon-wrap--gke { background: linear-gradient(135deg, var(--provider-gke), var(--provider-gke-2)); }
 .badge__icon-wrap--eks { background: linear-gradient(135deg, var(--provider-eks), var(--provider-eks-2)); }
 .badge__icon-wrap--aks { background: linear-gradient(135deg, var(--provider-aks), var(--provider-aks-2)); }
+.badge__icon-wrap--local { background: linear-gradient(135deg, var(--provider-local), var(--provider-local-2)); }
 .badge--gke { color: #1A56C4; background: linear-gradient(135deg, color-mix(in srgb, var(--provider-gke) 18%, var(--bg-elevated)), color-mix(in srgb, var(--provider-gke-2) 10%, var(--bg-elevated))); border-color: color-mix(in srgb, var(--provider-gke) 35%, transparent); }
 .badge--eks { color: #B45F00; background: linear-gradient(135deg, color-mix(in srgb, var(--provider-eks) 20%, var(--bg-elevated)), color-mix(in srgb, var(--provider-eks-2) 12%, var(--bg-elevated))); border-color: color-mix(in srgb, var(--provider-eks) 35%, transparent); }
 .badge--aks { color: #0060AC; background: linear-gradient(135deg, color-mix(in srgb, var(--provider-aks) 18%, var(--bg-elevated)), color-mix(in srgb, var(--provider-aks-2) 12%, var(--bg-elevated))); border-color: color-mix(in srgb, var(--provider-aks) 35%, transparent); }
+.badge--local { color: #0F6B2C; background: linear-gradient(135deg, color-mix(in srgb, var(--provider-local) 18%, var(--bg-elevated)), color-mix(in srgb, var(--provider-local-2) 10%, var(--bg-elevated))); border-color: color-mix(in srgb, var(--provider-local) 35%, transparent); }
 :root[data-theme="dark"] .badge--gke, :root:not([data-theme="light"]) .badge--gke { color: #8AB4FF; }
 :root[data-theme="dark"] .badge--eks, :root:not([data-theme="light"]) .badge--eks { color: #FFB454; }
 :root[data-theme="dark"] .badge--aks, :root:not([data-theme="light"]) .badge--aks { color: #6FC3FF; }
+:root[data-theme="dark"] .badge--local, :root:not([data-theme="light"]) .badge--local { color: #4ADE80; }
 
 .env-chip { font-size: var(--text-xs); font-weight: 700; padding: 4px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em; }
 .env-chip--sandbox { background: var(--info-soft); color: var(--info); }
@@ -447,12 +511,16 @@ strong, b { font-weight: 700; }
 
 /* -- workload catalog type filter chips -- */
 .catalog-chip {
-  padding: 5px 14px; border-radius: 999px; border: 1.5px solid var(--border);
-  background: transparent; color: var(--fg-muted); font-size: 0.8rem; font-weight: 600;
-  cursor: pointer; transition: all 150ms;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-elevated); color: var(--fg-muted); font-size: 0.8rem; font-weight: 600;
+  cursor: pointer; box-shadow: var(--shadow-raised-sm); transition: all 150ms;
 }
-.catalog-chip:hover { background: var(--bg-hover); color: var(--fg); }
-.catalog-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.catalog-chip svg { flex-shrink: 0; }
+.catalog-chip:hover { background: var(--bg-hover); color: var(--fg); box-shadow: var(--shadow-raised-md); }
+.catalog-chip[aria-pressed="true"] { background: var(--grad-pill-selected); border-color: var(--accent); color: var(--accent); box-shadow: var(--shadow-raised-md); }
 .pill--warning { background: var(--warning-soft); color: var(--warning); }
 .pill--critical { background: var(--danger-soft); color: var(--danger); }
 .pill--unknown { background: var(--unknown-soft); color: var(--unknown); }
@@ -543,11 +611,11 @@ strong, b { font-weight: 700; }
   font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
-  box-shadow: var(--shadow-xs);
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  box-shadow: var(--shadow-raised-sm);
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
-.subtabs__item:hover { color: var(--fg); background: var(--bg-hover); }
-.subtabs__item[aria-selected="true"] { color: var(--accent-fg); background: var(--grad-accent); border-color: transparent; box-shadow: var(--shadow-raised-sm); }
+.subtabs__item:hover { color: var(--fg); background: var(--bg-hover); box-shadow: var(--shadow-raised-md); }
+.subtabs__item[aria-selected="true"] { color: var(--accent-fg); background: var(--grad-accent); border-color: transparent; box-shadow: var(--shadow-raised-md); }
 .subtabs__count {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 5px;
@@ -577,8 +645,12 @@ strong, b { font-weight: 700; }
 
 /* -- stat grid -- */
 .stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  /* Flex, not grid -- grid's auto-fit columns force every card in a row to
+     match the widest one. Flex lets each card claim only the width its own
+     content needs (a bare "2" stays compact; "Not configured" gets more
+     room), while still wrapping to new rows and staying gap-aligned. */
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -593,6 +665,9 @@ strong, b { font-weight: 700; }
   overflow: hidden;
   animation: fade-in-up var(--transition-base) backwards;
   transition: transform var(--transition-base), box-shadow var(--transition-base);
+  flex: 0 1 auto;
+  min-width: 148px;
+  max-width: 320px;
 }
 .stat-grid > .stat-card:nth-child(1) { animation-delay: 0ms; }
 .stat-grid > .stat-card:nth-child(2) { animation-delay: 40ms; }
@@ -606,8 +681,17 @@ strong, b { font-weight: 700; }
   opacity: 0.85;
 }
 .stat-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-raised-lg); }
+.stat-card__header { display: flex; align-items: center; gap: 6px; }
+.stat-card__icon { display: inline-flex; flex-shrink: 0; color: var(--fg-subtle); }
+.stat-card__icon svg { display: block; width: 14px; height: 14px; }
 .stat-card__label { font-size: var(--text-xs); color: var(--fg-subtle); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
-.stat-card__value { font-family: var(--font-mono); font-size: var(--text-2xl); font-weight: 700; line-height: 1; letter-spacing: -0.01em; }
+/* Value text stays on one line -- see statValueSizeClass() in components.js,
+   which picks the tier below by how long the value string is, instead of
+   every card using the same size and long values wrapping into a stack. */
+.stat-card__value { font-family: var(--font-mono); font-size: var(--text-2xl); font-weight: 700; line-height: 1.15; letter-spacing: -0.01em; white-space: nowrap; }
+.stat-card__value--md { font-size: 1.5rem; }
+.stat-card__value--sm { font-size: 1.2rem; }
+.stat-card__value--xs { font-size: 1rem; }
 .stat-card__sub { font-size: var(--text-xs); color: var(--fg-muted); display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .stat-card__sub .pill { padding: 1px 8px; }
 
@@ -712,7 +796,8 @@ strong, b { font-weight: 700; }
 .modal-overlay[hidden] { display: none; }
 .modal {
   background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-xl); box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
   width: 100%; max-width: 560px; max-height: 85vh; display: flex; flex-direction: column;
   animation: modal-in 280ms cubic-bezier(0,0,0,1);
   backdrop-filter: blur(20px);
@@ -794,7 +879,8 @@ strong, b { font-weight: 700; }
 .topology-legend__item { display: flex; align-items: center; gap: 6px; }
 .topology-legend__swatch { width: 10px; height: 10px; border-radius: 3px; }
 .topology-container {
-  background: var(--grad-surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--grad-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   overflow: auto; padding: var(--space-5);
   box-shadow: var(--shadow-raised-md);
 }
@@ -859,7 +945,8 @@ strong, b { font-weight: 700; }
 .topo-tooltip {
   position: fixed; z-index: 40; pointer-events: none;
   background: var(--bg-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-md); box-shadow: var(--shadow-raised-lg);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised-lg);
   padding: 12px 14px; min-width: 220px; max-width: 320px;
   opacity: 0; transform: translateY(2px);
   transition: opacity 120ms ease, transform 120ms ease;
@@ -888,6 +975,114 @@ strong, b { font-weight: 700; }
 @keyframes topo-flow { to { stroke-dashoffset: -600; } }
 .topo-col-label { fill: var(--fg-muted); font-family: var(--font-ui); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
 
+/* -- Cluster Map: per-node capacity cards -- */
+.cmap-legend {
+  display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--grad-surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  margin: var(--space-5) 0; box-shadow: var(--shadow-raised-sm);
+}
+.cmap-legend__item { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 600; color: var(--fg-muted); }
+/* Same faceted-diamond language as .cmap-pod-chip below (a static swatch
+   here, not clickable) so a namespace's color reads consistently whether
+   it's labeling a legend entry or an actual pod tile. */
+.cmap-legend__swatch {
+  width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex-shrink: 0;
+  margin: 0 2px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--chip-color) 65%, white 30%), var(--chip-color) 75%);
+  box-shadow: var(--shadow-xs);
+}
+
+.cmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: var(--space-5); }
+
+.cmap-card {
+  background: var(--grad-surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4);
+  box-shadow: var(--shadow-raised-md);
+  animation: fade-in-up var(--transition-base) backwards;
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+}
+.cmap-grid > .cmap-card:nth-child(1) { animation-delay: 0ms; }
+.cmap-grid > .cmap-card:nth-child(2) { animation-delay: 60ms; }
+.cmap-grid > .cmap-card:nth-child(3) { animation-delay: 120ms; }
+.cmap-grid > .cmap-card:nth-child(4) { animation-delay: 180ms; }
+.cmap-grid > .cmap-card:nth-child(5) { animation-delay: 240ms; }
+.cmap-grid > .cmap-card:nth-child(6) { animation-delay: 300ms; }
+.cmap-card:hover { box-shadow: var(--shadow-raised-lg); }
+
+.cmap-card__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.cmap-card__name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cmap-card__name {
+  font-weight: 700; font-family: var(--font-mono); font-size: 0.92rem; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+}
+.cmap-status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.cmap-status-dot--ok { background: var(--success); animation: indicator-pulse 2.4s ease infinite; }
+.cmap-status-dot--bad { background: var(--danger); }
+
+.cmap-card__chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.cmap-chip { font-size: 0.72rem; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--bg-inset); color: var(--fg-muted); }
+
+/* Radial gauges -- ring starts empty (stroke-dashoffset = full circumference,
+   set inline by radialGauge() in app.js) and animates to its real value one
+   frame after mount, so it visibly fills in rather than appearing static. */
+.cmap-gauges { display: flex; gap: var(--space-3); justify-content: space-around; }
+.cmap-gauge { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.cmap-gauge__ring-wrap { position: relative; width: 64px; height: 64px; }
+.cmap-gauge__ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cmap-gauge__track { fill: none; stroke: var(--bg-inset); stroke-width: 5; }
+.cmap-gauge__fill { fill: none; stroke-width: 5; stroke-linecap: round; transition: stroke-dashoffset 900ms cubic-bezier(0.22,1,0.36,1), stroke 300ms ease; }
+.cmap-gauge__pct {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-weight: 800; font-size: 0.8rem; color: var(--fg);
+}
+.cmap-gauge__label { font-size: 0.64rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-subtle); }
+.cmap-gauge__sub { font-size: 0.66rem; color: var(--fg-muted); font-family: var(--font-mono); white-space: nowrap; }
+
+.cmap-podsection__header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.cmap-podsection__title { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-subtle); }
+.cmap-podsection__meta { font-size: 0.72rem; color: var(--fg-subtle); }
+
+/* Per-namespace pod chips -- one directly-clickable tile per pod (click
+   opens that pod's logs), replacing both the original flat dot grid and an
+   aggregate proportional bar tried in between that lost the per-pod click
+   entirely. Chips pop in with a staggered delay (animation-delay set
+   per-chip in podChipsForNamespace()) instead of appearing all at once. */
+.cmap-ns-list { display: flex; flex-direction: column; gap: 10px; }
+.cmap-ns-row { display: flex; flex-direction: column; gap: 5px; }
+.cmap-ns-row__label { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 600; color: var(--fg-muted); }
+.cmap-podlegend__count { opacity: 0.7; font-size: 0.68rem; }
+.cmap-pod-chips { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px 0; }
+/* Faceted "gem" tile, one per pod -- a rotated square (the same shape this
+   app already uses as its Pod *kind* icon in the Resource Map/Workload
+   Catalog, see RESOURCE_TYPE_THEME.pod in resourcemap.js), not a plain flat
+   dot: a light-to-base diagonal gradient gives each tile a subtle faceted
+   pop instead of a single flat fill. Sized down from its 16px cell and
+   margined out so the ~1.41x diagonal from the 45deg rotation doesn't clip
+   into neighboring tiles. */
+.cmap-pod-chip {
+  width: 11px; height: 11px; flex-shrink: 0; margin: 2px;
+  border-radius: 3px;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--chip-color) 65%, white 30%), var(--chip-color) 75%);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  animation: pop-in-diamond 320ms cubic-bezier(0.22,1,0.36,1) backwards;
+  transition: transform 150ms cubic-bezier(0.34,1.56,0.64,1), box-shadow 150ms ease, filter 150ms ease;
+}
+.cmap-pod-chip:hover, .cmap-pod-chip:focus-visible {
+  transform: rotate(45deg) scale(1.6);
+  box-shadow: var(--shadow-raised-md);
+  filter: brightness(1.15);
+  position: relative; z-index: 1;
+}
+.cmap-pod-chip:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Pods with no known name (count-only data) aren't clickable -- visually
+   flatten them so hover/focus doesn't imply an action that does nothing. */
+.cmap-pod-chip[tabindex="-1"] { cursor: default; opacity: 0.55; }
+.cmap-pod-chip[tabindex="-1"]:hover, .cmap-pod-chip[tabindex="-1"]:focus-visible { transform: rotate(45deg); box-shadow: var(--shadow-xs); filter: none; }
+
 /* -- footer status strip -- */
 .status-strip {
   display: flex; align-items: center; gap: var(--space-4);
@@ -906,13 +1101,22 @@ strong, b { font-weight: 700; }
   width: 100%; text-align: left;
   padding: 0.38rem 0.65rem;
   font-size: 0.82rem; font-weight: 500;
-  color: var(--fg-muted); border-radius: var(--radius-sm);
-  background: transparent; border: none; cursor: pointer;
+  color: var(--fg-muted);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  /* A faint edge, since a same-color surface separated only by a very
+     subtle shadow reads as almost invisible at rest -- the border gives
+     the pill a crisp line to read even before the shadow kicks in. */
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  cursor: pointer;
+  box-shadow: var(--shadow-raised-sm);
   transition: background var(--transition-fast), color var(--transition-fast),
-              padding-left var(--transition-fast);
+              padding-left var(--transition-fast), box-shadow var(--transition-fast),
+              border-color var(--transition-fast), transform var(--transition-fast);
   display: flex; align-items: center; gap: 6px;
 }
-.sidebar-item:hover { background: var(--bg-hover); color: var(--fg); padding-left: 0.9rem; }
+.sidebar-item:hover { background: var(--bg-hover); color: var(--fg); padding-left: 0.9rem; box-shadow: var(--shadow-raised-md); border-color: var(--border-strong); }
+.sidebar-item:active { transform: scale(.98); }
 
 /* Sidebar nav-group expand/collapse. `display:none`/`flex` (the previous
    approach) can't be transitioned at all -- it snaps instantly -- so this
@@ -939,13 +1143,16 @@ strong, b { font-weight: 700; }
 .sidebar-item[aria-selected="true"] .sidebar-item__count { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .sidebar-item__count:empty { display: none; }
 .sidebar-item[aria-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--grad-pill-selected);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
   padding-left: 0.9rem;
+  border-color: var(--accent);
+  /* Raised glossy pill -- light catching the top, accent border, soft
+     shadow lifting it off the sidebar, rather than a pressed/inset look. */
+  box-shadow: var(--shadow-raised-md);
 }
 [data-theme="dark"] .sidebar-item[aria-selected="true"] {
-  background: rgba(138, 180, 248, 0.15);
   color: #8AB4F8;
 }
 
@@ -955,45 +1162,12 @@ strong, b { font-weight: 700; }
 /* Cluster card (sidebar panel) */
 .cluster-card {
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised-sm);
   transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
-.cluster-card:hover { box-shadow: var(--shadow-xs); }
+.cluster-card:hover { box-shadow: var(--shadow-raised-md); }
 
 /* ===== ENTERPRISE PILLARS STYLING ===== */
-
-/* 1. Fleet Overview Styles */
-.fleet-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--space-4);
-}
-.fleet-card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 1.25rem;
-  box-shadow: var(--shadow-xs);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
-.fleet-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-raised-md);
-  border-color: var(--accent);
-}
-.fleet-health-meter {
-  height: 6px;
-  background: var(--bg-inset);
-  border-radius: 99px;
-  overflow: hidden;
-  display: flex;
-}
-.fleet-health-segment {
-  height: 100%;
-  transition: width 0.3s ease;
-}
 
 /* 2. Logical Applications */
 .app-card {
@@ -1001,15 +1175,13 @@ strong, b { font-weight: 700; }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-raised-sm);
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  transition: border-color var(--transition-fast);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
-.app-card:hover {
-  border-color: var(--accent);
-}
+.app-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-raised-md); border-color: var(--accent); }
 .app-child-pill {
   display: inline-flex;
   align-items: center;
@@ -1018,6 +1190,7 @@ strong, b { font-weight: 700; }
   border-radius: 8px;
   background: var(--bg-inset);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-inset);
   font-size: 0.78rem;
   font-weight: 500;
 }
@@ -1065,6 +1238,7 @@ strong, b { font-weight: 700; }
   background: #0d1117;
   color: #e6edf3;
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-inset);
   padding: 0.8rem 1rem;
   font-family: var(--font-mono);
   font-size: 0.82rem;
@@ -1081,15 +1255,19 @@ strong, b { font-weight: 700; }
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--fg-muted);
-  border: none;
-  background: transparent;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: var(--bg-elevated);
   cursor: pointer;
-  border-bottom: 2px solid transparent;
+  box-shadow: var(--shadow-raised-sm);
   transition: all var(--transition-fast);
 }
+.inspector-tab:hover { color: var(--fg); box-shadow: var(--shadow-raised-md); border-color: var(--border-strong); }
 .inspector-tab[aria-selected="true"] {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  background: var(--grad-pill-selected);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-raised-md);
 }
 .probe-status-row {
   display: flex;
@@ -1099,6 +1277,7 @@ strong, b { font-weight: 700; }
   border-radius: 8px;
   background: var(--bg-inset);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-inset);
   font-size: 0.8rem;
 }
 .terminal-output {
@@ -1112,6 +1291,7 @@ strong, b { font-weight: 700; }
   overflow-x: auto;
   white-space: pre-wrap;
   border: 1px solid #21262d;
+  box-shadow: var(--shadow-inset);
   max-height: 340px;
 }
 
@@ -1181,6 +1361,25 @@ strong, b { font-weight: 700; }
   opacity: 1;
 }
 
+/* Onboard-modal segmented controls (provider tabs, environment pills) --
+   inline styles on these elements (in index.html) only ever touch
+   background/border-color/color at runtime, so box-shadow is safe to own
+   here without fighting the JS toggle logic. Corner radius stays inline
+   (index.html) since it already matches this raised-pill look. */
+.provider-tab {
+  box-shadow: var(--shadow-raised-sm);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast), background 150ms, border-color 150ms;
+}
+.provider-tab:hover { box-shadow: var(--shadow-raised-md); }
+.provider-tab:active { transform: scale(.97); }
+.provider-tab[aria-pressed="true"] { box-shadow: var(--shadow-raised-md); }
+
+.env-pill-opt {
+  box-shadow: var(--shadow-raised-sm);
+}
+input[name="onboard-env"]:checked + .env-pill-opt { box-shadow: var(--shadow-raised-md); }
+input[name="onboard-env"]:focus-visible + .env-pill-opt { outline: 2px solid var(--ring); outline-offset: 2px; }
+
 @media (max-width: 1024px) {
   .main { padding: var(--space-4); }
 }
@@ -1203,10 +1402,10 @@ strong, b { font-weight: 700; }
   .nav-tabs { justify-content: flex-start; padding: var(--space-2) var(--space-3); }
   .nav-tabs__label { display: none; }
   .nav-tabs__group { max-width: 100%; overflow-x: auto; }
-  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .stat-card { flex-basis: calc(50% - var(--space-4) / 2); }
   .modal { max-width: 100%; max-height: 100%; height: 100%; border-radius: 0; }
 }
 @media (max-width: 480px) {
-  .stat-grid { grid-template-columns: 1fr 1fr; }
+  .stat-card { flex-basis: 100%; max-width: 100%; }
   .view-header { flex-direction: column; align-items: flex-start; }
 }

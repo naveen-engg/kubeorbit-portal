@@ -22,9 +22,32 @@ import {
   providerBadge,
 } from "./components.js";
 import { renderTopologyGraph, topologyLegend, hideNodeTooltip, NETWORK_COLUMNS, STORAGE_COLUMNS, NAMESPACE_MAP_COLUMNS } from "./topology.js";
-import { ResourceMapController } from "./resourcemap.js";
+import { ResourceMapController, RESOURCE_TYPE_THEME } from "./resourcemap.js";
 
 const $ = (id) => document.getElementById(id);
+
+// Small icon set for statCard()'s optional 4th argument, used across the
+// Overview/Nodes/Clusters/Diagnostics stat grids. Kept separate from
+// RESOURCE_TYPE_THEME (imported above) since these are generic dashboard
+// concepts (status, location, ...), not k8s resource kinds -- workload
+// stat cards (Pods/Deployments/.../CronJobs) reuse RESOURCE_TYPE_THEME's
+// icons directly instead, so a kind's icon is defined in exactly one place.
+const STAT_ICONS = {
+  version: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`,
+  status: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`,
+  location: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`,
+  server: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1.5"/><rect x="2" y="15" width="20" height="6" rx="1.5"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>`,
+  layers: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>`,
+  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5.5 3.5 9.7 8 11 4.5-1.3 8-5.5 8-11V5z"/></svg>`,
+  checkCircle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-5"/></svg>`,
+  crown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 8 4 3 6-8 6 8 4-3-2 11H4Z"/></svg>`,
+  grid: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
+  pulse: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>`,
+  cloud: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H6a4 4 0 0 1-.5-7.97 5.5 5.5 0 0 1 10.6-1.94A4 4 0 0 1 17.5 19z"/></svg>`,
+  funnel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.5V19l4 2v-8.5L22 3z"/></svg>`,
+  shieldCheck: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5.5 3.5 9.7 8 11 4.5-1.3 8-5.5 8-11V5z"/><path d="m9 12 2 2 4-4"/></svg>`,
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>`,
+};
 
 const state = {
   teams: [],
@@ -284,12 +307,12 @@ function renderOverview(data) {
 
   const children = [
     statGrid([
-      statCard("Kubernetes Version", meta.kubernetes_version || "—"),
-      statCard("Status", meta.status || "—"),
-      statCard("Location", meta.location || "—"),
-      statCard("Nodes", node_count),
-      statCard("Node Pools", meta.node_pools.length),
-      statCard("Workload Identity", meta.workload_identity?.enabled ? "Enabled" : "Not configured"),
+      statCard("Kubernetes Version", meta.kubernetes_version || "—", null, STAT_ICONS.version),
+      statCard("Status", meta.status || "—", null, STAT_ICONS.status),
+      statCard("Location", meta.location || "—", null, STAT_ICONS.location),
+      statCard("Nodes", node_count, null, STAT_ICONS.server),
+      statCard("Node Pools", meta.node_pools.length, null, STAT_ICONS.layers),
+      statCard("Workload Identity", meta.workload_identity?.enabled ? "Enabled" : "Not configured", null, STAT_ICONS.shield),
     ]),
   ];
 
@@ -348,8 +371,8 @@ function renderOverview(data) {
     )
   );
 
-  children.push(panel("Estimated Monthly Cost", h("div", { id: "cost-panel-content" }, loadingSkeleton(2))));
-  children.push(panel("Ecosystem & Integrations", h("div", { id: "ecosystem-panel-content" }, loadingSkeleton(2))));
+  children.push(panel("Estimated Monthly Cost", h("div", { id: "cost-panel-content" }, loadingSkeleton(2)), null, true));
+  children.push(panel("Ecosystem & Integrations", h("div", { id: "ecosystem-panel-content" }, loadingSkeleton(2)), null, true));
 
   if (meta.console_url || meta.logs_url) {
     children.push(h("div", { style: "display:flex;gap:8px;flex-wrap:wrap;" }, [
@@ -454,6 +477,15 @@ function workloadDetail(r) {
   return "—";
 }
 
+// RESOURCE_TYPE_THEME's icon field is a bare shape (<polygon>/<rect>/...),
+// meant to be dropped inside an already-open <svg> in the resource map's own
+// canvas -- wrap it in one here so it's a self-contained icon usable inside
+// statCard()'s plain HTML span.
+function kindIcon(kind) {
+  const theme = RESOURCE_TYPE_THEME[kind];
+  return theme ? `<svg viewBox="0 0 24 24">${theme.icon}</svg>` : "";
+}
+
 function renderWorkloads(data) {
   const o = data.overview;
   const categories = [
@@ -464,9 +496,9 @@ function renderWorkloads(data) {
     ["Jobs", o.jobs],
   ];
   const cards = categories.map(([label, stat]) =>
-    statCard(label, stat.total, [pill(`${stat.healthy} healthy`, "healthy"), stat.unhealthy ? pill(`${stat.unhealthy} unhealthy`, "critical") : null])
+    statCard(label, stat.total, [pill(`${stat.healthy} healthy`, "healthy"), stat.unhealthy ? pill(`${stat.unhealthy} unhealthy`, "critical") : null], kindIcon(label.toLowerCase().replace(/s$/, "")))
   );
-  cards.push(statCard("CronJobs", o.cronjobs.total, [pill(`${o.cronjobs.active} active`, "healthy")]));
+  cards.push(statCard("CronJobs", o.cronjobs.total, [pill(`${o.cronjobs.active} active`, "healthy")], kindIcon("cronjob")));
 
   const children = [statGrid(cards)];
   for (const [label, stat] of categories) {
@@ -1243,10 +1275,10 @@ function renderNodes(nodes = []) {
   const workerCount = Math.max(0, nodes.length - controlPlaneCount);
 
   const stats = statGrid([
-    statCard("Total Nodes", nodes.length),
-    statCard("Ready Nodes", readyCount),
-    statCard("Control Plane", controlPlaneCount),
-    statCard("Workers", workerCount),
+    statCard("Total Nodes", nodes.length, null, STAT_ICONS.server),
+    statCard("Ready Nodes", readyCount, null, STAT_ICONS.checkCircle),
+    statCard("Control Plane", controlPlaneCount, null, STAT_ICONS.crown),
+    statCard("Workers", workerCount, null, STAT_ICONS.server),
   ]);
 
   const cards = nodes.map((node) => {
@@ -1337,122 +1369,203 @@ async function loadClusterMap() {
   }
 }
 
+// Shared tooltip for the Cluster Map's gauges/pod-distribution bar -- built
+// on the same .topo-tooltip markup/CSS topology.js's showNodeTooltip() uses,
+// but as its own tiny instance rather than reusing that function directly:
+// showNodeTooltip's row content is derived from a topology graph node shape
+// (kind/label/edges), which doesn't fit a "namespace slice of a node's pod
+// capacity" -- duplicating the ~15 lines of positioning logic here is cheaper
+// and lower-risk than bending that function's data contract to also cover
+// this unrelated caller.
+let _cmapTooltipEl = null;
+function _cmapTooltip() {
+  if (!_cmapTooltipEl) {
+    _cmapTooltipEl = document.createElement("div");
+    _cmapTooltipEl.className = "topo-tooltip";
+    _cmapTooltipEl.setAttribute("role", "tooltip");
+    document.body.appendChild(_cmapTooltipEl);
+  }
+  return _cmapTooltipEl;
+}
+function _cmapPositionTooltip(x, y) {
+  const el = _cmapTooltipEl;
+  if (!el) return;
+  const margin = 12;
+  const rect = el.getBoundingClientRect();
+  let left = x + margin;
+  let top = y + margin;
+  if (left + rect.width > window.innerWidth - margin) left = x - rect.width - margin;
+  if (top + rect.height > window.innerHeight - margin) top = y - rect.height - margin;
+  el.style.left = `${Math.max(margin, left)}px`;
+  el.style.top = `${Math.max(margin, top)}px`;
+}
+function showCmapTooltip(x, y, kind, name, rows) {
+  const el = _cmapTooltip();
+  el.replaceChildren(
+    h("div", { class: "topo-tooltip__kind" }, kind),
+    h("div", { class: "topo-tooltip__name" }, name),
+    h("div", { class: "topo-tooltip__rows" }, rows.map(([label, value]) =>
+      h("div", { class: "topo-tooltip__row" }, [
+        h("span", { class: "topo-tooltip__row-label" }, label),
+        h("span", { class: "topo-tooltip__row-value" }, value),
+      ])
+    ))
+  );
+  el.classList.add("is-visible");
+  _cmapPositionTooltip(x, y);
+}
+function moveCmapTooltip(x, y) { _cmapPositionTooltip(x, y); }
+function hideCmapTooltip() { _cmapTooltipEl?.classList.remove("is-visible"); }
+
+// Radial usage gauge (CPU/MEM/PODS): an SVG ring whose stroke-dashoffset is
+// set to "empty" on creation and only moved to its real target after mount
+// (see the requestAnimationFrame pass in renderClusterMap) so it animates
+// filling in via the .cmap-gauge__fill CSS transition, rather than a percent
+// number and a static bar appearing instantly.
+function radialGauge(pct, label, sub, baseColor) {
+  const clamped = Math.min(100, Math.max(0, Math.round(pct)));
+  const r = 26;
+  const c = 2 * Math.PI * r;
+  const color = clamped >= 85 ? "var(--danger)" : clamped >= 65 ? "var(--warning)" : baseColor;
+  const fill = h("circle", {
+    class: "cmap-gauge__fill",
+    cx: "32", cy: "32", r: String(r),
+    stroke: color,
+    "stroke-dasharray": String(c),
+    "stroke-dashoffset": String(c),
+    "data-target-offset": String(c * (1 - clamped / 100)),
+  });
+  return h("div", { class: "cmap-gauge" }, [
+    h("div", { class: "cmap-gauge__ring-wrap" }, [
+      h("svg", { viewBox: "0 0 64 64" }, [
+        h("circle", { class: "cmap-gauge__track", cx: "32", cy: "32", r: String(r) }),
+        fill,
+      ]),
+      h("span", { class: "cmap-gauge__pct" }, `${clamped}%`),
+    ]),
+    h("span", { class: "cmap-gauge__label" }, label),
+    h("span", { class: "cmap-gauge__sub" }, sub),
+  ]);
+}
+
+// One directly-clickable chip per pod (click opens that pod's logs, same
+// as the original dot grid) -- tried an aggregate proportional bar first,
+// but that collapsed the whole point of this section: being able to see
+// and click each individual pod. Grouped under a namespace label row, chips
+// pop in with a staggered delay instead of appearing all at once.
+function podChipsForNamespace(ns) {
+  const podList = ns.pods && ns.pods.length ? ns.pods : null;
+  const items = podList || Array.from({ length: ns.count || 0 });
+  return items.map((pName, idx) => {
+    const podName = typeof pName === "string" ? pName : null;
+    return h("span", {
+      class: "cmap-pod-chip",
+      style: `--chip-color:${ns.color};animation-delay:${Math.min(idx * 30, 300)}ms;`,
+      tabindex: podName ? "0" : "-1",
+      onmouseenter: (e) => showCmapTooltip(e.clientX, e.clientY, "POD", podName || `${ns.namespace}-${idx + 1}`, [
+        ["Namespace", ns.namespace],
+        ...(podName ? [] : [["Name", "unavailable for this view"]]),
+      ]),
+      onmousemove: (e) => moveCmapTooltip(e.clientX, e.clientY),
+      onmouseleave: hideCmapTooltip,
+      onclick: podName ? () => openLogsModal(podName, ns.namespace) : null,
+      onkeydown: podName ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLogsModal(podName, ns.namespace); } } : null,
+    });
+  });
+}
+
+function buildNodeNamespaces(namespaces) {
+  const rows = namespaces.map((ns) =>
+    h("div", { class: "cmap-ns-row" }, [
+      h("div", { class: "cmap-ns-row__label" }, [
+        h("span", { class: "cmap-legend__swatch", style: `--chip-color:${ns.color};` }),
+        h("span", {}, ns.namespace),
+        h("span", { class: "cmap-podlegend__count" }, String(ns.count)),
+      ]),
+      h("div", { class: "cmap-pod-chips" }, podChipsForNamespace(ns)),
+    ])
+  );
+  return h("div", { class: "cmap-ns-list" }, rows);
+}
+
 function renderClusterMap(data) {
   const container = $("map-content");
   const summary = data.summary || { nodes: 0, ready: 0, pods_scheduled: 0, namespaces: 0 };
   const namespaces = (data.namespaces || []).filter((ns) => ns.name !== "kube-system");
   const nodes = data.nodes || [];
 
-  const statsRow = h("div", {
-    style: "display:grid;grid-template-columns:repeat(4, 1fr);gap:1rem;margin-bottom:1.25rem;"
-  }, [
-    h("div", { className: "card", style: "padding:1rem 1.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-raised-sm);" }, [
-      h("div", { style: "font-size:0.75rem;font-weight:700;letter-spacing:0.05em;color:var(--fg-muted);text-transform:uppercase;" }, "NODES"),
-      h("div", { style: "font-size:1.8rem;font-weight:800;color:var(--fg);margin-top:0.25rem;" }, String(summary.nodes)),
-    ]),
-    h("div", { className: "card", style: "padding:1rem 1.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-raised-sm);" }, [
-      h("div", { style: "font-size:0.75rem;font-weight:700;letter-spacing:0.05em;color:var(--fg-muted);text-transform:uppercase;" }, "READY"),
-      h("div", { style: "font-size:1.8rem;font-weight:800;color:var(--success);margin-top:0.25rem;" }, String(summary.ready)),
-    ]),
-    h("div", { className: "card", style: "padding:1rem 1.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-raised-sm);" }, [
-      h("div", { style: "font-size:0.75rem;font-weight:700;letter-spacing:0.05em;color:var(--fg-muted);text-transform:uppercase;" }, "PODS SCHEDULED"),
-      h("div", { style: "font-size:1.8rem;font-weight:800;color:var(--fg);margin-top:0.25rem;" }, String(summary.pods_scheduled)),
-    ]),
-    h("div", { className: "card", style: "padding:1rem 1.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-raised-sm);" }, [
-      h("div", { style: "font-size:0.75rem;font-weight:700;letter-spacing:0.05em;color:var(--fg-muted);text-transform:uppercase;" }, "NAMESPACES"),
-      h("div", { style: "font-size:1.8rem;font-weight:800;color:var(--fg);margin-top:0.25rem;" }, String(namespaces.length)),
-    ]),
+  const stats = statGrid([
+    statCard("Nodes", summary.nodes, null, STAT_ICONS.server),
+    statCard("Ready", summary.ready, null, STAT_ICONS.checkCircle),
+    statCard("Pods Scheduled", summary.pods_scheduled, null, kindIcon("pod")),
+    statCard("Namespaces", namespaces.length, null, STAT_ICONS.folder),
   ]);
 
-  const legendItems = namespaces.map((ns) =>
-    h("div", { style: "display:inline-flex;align-items:center;gap:0.35rem;font-size:0.8rem;font-weight:600;color:var(--fg-muted);" }, [
-      h("span", { style: `width:10px;height:10px;border-radius:2px;background:${ns.color};display:inline-block;` }),
+  const legendBar = h("div", { class: "cmap-legend" }, namespaces.map((ns) =>
+    h("span", { class: "cmap-legend__item" }, [
+      h("span", { class: "cmap-legend__swatch", style: `--chip-color:${ns.color};` }),
       h("span", {}, ns.name),
     ])
-  );
-
-  const legendBar = h("div", {
-    style: "display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:0.75rem 1rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;margin-bottom:1.25rem;box-shadow:var(--shadow-raised-sm);"
-  }, legendItems);
+  ));
 
   const nodeCardsList = nodes.map((n) => {
     const isReady = n.status === "Ready";
-    const cpuPct = Math.min(100, Math.max(0, n.cpu?.percent || 0));
-    const memPct = Math.min(100, Math.max(0, n.memory?.percent || 0));
-    const podsPct = Math.min(100, Math.max(0, Math.round(((n.pods_capacity?.used || 0) / (n.pods_capacity?.total || 110)) * 100)));
+    const cpuPct = n.cpu?.percent || 0;
+    const memPct = n.memory?.percent || 0;
+    const capacity = n.pods_capacity?.total || 110;
+    const podsPct = Math.round(((n.pods_capacity?.used || 0) / capacity) * 100);
+    const nodeNamespaces = (n.namespaces || []).filter((ns) => ns.namespace !== "kube-system");
+    const freeSlots = Math.max(0, capacity - (n.pods_capacity?.used || 0));
 
-    const nsRows = (n.namespaces || [])
-      .filter((ns) => ns.namespace !== "kube-system")
-      .map((ns) => {
-        const podList = ns.pods || [];
-        const items = podList.length ? podList : Array.from({ length: ns.count });
-        const squares = items.map((pName, idx) => {
-          const podName = typeof pName === "string" ? pName : `${ns.namespace}-pod-${idx + 1}`;
-          return h("span", {
-            title: `Pod: ${podName} (Namespace: ${ns.namespace})`,
-            style: `width:10px;height:10px;border-radius:2px;background:${ns.color};display:inline-block;cursor:pointer;transition:transform 0.15s;`,
-            onclick: typeof pName === "string" ? () => openLogsModal(podName, ns.namespace) : null
-          });
-        });
-        return h("div", { style: "margin-bottom:0.4rem;" }, [
-          h("div", { style: "display:flex;align-items:center;gap:0.4rem;font-size:0.8rem;font-weight:600;color:var(--fg-muted);" }, [
-            h("span", { style: `width:8px;height:8px;border-radius:2px;background:${ns.color};display:inline-block;` }),
-            h("span", {}, ns.namespace),
-            h("span", { style: "opacity:0.75;font-size:0.75rem;" }, String(ns.count)),
-          ]),
-          h("div", { style: "display:flex;gap:3px;margin-top:3px;flex-wrap:wrap;" }, squares),
-        ]);
-      });
+    return h("div", { class: "cmap-card" }, [
+      h("div", { class: "cmap-card__header" }, [
+        h("div", { class: "cmap-card__name-row" }, [
+          h("span", { class: `cmap-status-dot ${isReady ? "cmap-status-dot--ok" : "cmap-status-dot--bad"}` }),
+          h("span", { class: "cmap-card__name", title: n.name }, n.short_name || n.name),
+          statusPill(isReady ? "Ready" : (n.status || "NotReady"), isReady),
+        ]),
+        h("button", {
+          class: "btn btn--secondary btn--sm",
+          style: "padding:0.25rem 0.65rem;font-size:0.78rem;font-weight:600;",
+          onclick: () => openManifestModal("Node", n.name, ""),
+        }, "YAML"),
+      ]),
+      h("div", { class: "cmap-card__chips" }, [
+        n.machine_type ? h("span", { class: "cmap-chip" }, n.machine_type) : null,
+        n.zone ? h("span", { class: "cmap-chip" }, n.zone) : null,
+        n.node_pool ? h("span", { class: "cmap-chip" }, n.node_pool) : null,
+      ].filter(Boolean)),
 
-    return h("div", {
-      className: "node-cluster-card card",
-      style: "background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:1.1rem;display:flex;flex-direction:column;gap:0.85rem;box-shadow:var(--shadow-raised-md);"
-    }, [
-      h("div", { style: "display:flex;justify-content:space-between;align-items:center;" }, [
-        h("span", { style: "font-weight:700;font-family:var(--font-mono,monospace);font-size:0.92rem;color:var(--fg);" }, n.short_name || n.name),
-        h("span", {
-          className: "badge",
-          style: `background:${isReady ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)"};color:${isReady ? "var(--success)" : "var(--danger)"};border:1px solid ${isReady ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"};font-weight:600;`
-        }, isReady ? "• Ready" : "• NotReady"),
+      h("div", { class: "cmap-gauges" }, [
+        radialGauge(cpuPct, "CPU", `${n.cpu?.used ?? "—"} / ${n.cpu?.total ?? "—"} cores`, "#3b82f6"),
+        radialGauge(memPct, "MEM", `${n.memory?.used ?? "—"} / ${n.memory?.total ?? "—"}`, "#8b5cf6"),
+        radialGauge(podsPct, "PODS", `${n.pods_capacity?.used ?? "—"} / ${capacity}`, "var(--success)"),
       ]),
-      h("div", { style: "display:flex;gap:0.35rem;flex-wrap:wrap;font-size:0.75rem;" }, [
-        h("span", { className: "badge", style: "background:var(--bg-inset);color:var(--fg-muted);" }, n.machine_type),
-        h("span", { className: "badge", style: "background:var(--bg-inset);color:var(--fg-muted);" }, n.zone),
-        h("span", { className: "badge", style: "background:var(--bg-inset);color:var(--fg-muted);" }, n.node_pool),
-      ]),
-      h("div", { style: "display:flex;flex-direction:column;gap:0.5rem;font-size:0.78rem;font-weight:600;" }, [
-        h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:0.5rem;" }, [
-          h("span", { style: "width:36px;color:var(--fg-muted);" }, "CPU"),
-          h("div", { style: "flex:1;height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden;" }, [
-            h("div", { style: `width:${cpuPct}%;height:100%;background:#3b82f6;border-radius:4px;` })
-          ]),
-          h("span", { style: "color:var(--fg-muted);font-family:var(--font-mono,monospace);font-size:0.75rem;" }, `${n.cpu?.used} / ${n.cpu?.total} ${cpuPct}%`),
+
+      nodeNamespaces.length ? h("div", { style: "display:flex;flex-direction:column;gap:8px;" }, [
+        h("div", { class: "cmap-podsection__header" }, [
+          h("span", { class: "cmap-podsection__title" }, "Pod Distribution"),
+          h("span", { class: "cmap-podsection__meta" }, `${n.pods_capacity?.used ?? 0} pods · ${freeSlots} slots free`),
         ]),
-        h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:0.5rem;" }, [
-          h("span", { style: "width:36px;color:var(--fg-muted);" }, "MEM"),
-          h("div", { style: "flex:1;height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden;" }, [
-            h("div", { style: `width:${memPct}%;height:100%;background:#8b5cf6;border-radius:4px;` })
-          ]),
-          h("span", { style: "color:var(--fg-muted);font-family:var(--font-mono,monospace);font-size:0.75rem;" }, `${n.memory?.used} / ${n.memory?.total} ${memPct}%`),
-        ]),
-        h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:0.5rem;" }, [
-          h("span", { style: "width:36px;color:var(--fg-muted);" }, "PODS"),
-          h("div", { style: "flex:1;height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden;" }, [
-            h("div", { style: `width:${podsPct}%;height:100%;background:var(--success);border-radius:4px;` })
-          ]),
-          h("span", { style: "color:var(--fg-muted);font-family:var(--font-mono,monospace);font-size:0.75rem;" }, `${n.pods_capacity?.used} / ${n.pods_capacity?.total}`),
-        ]),
-      ]),
-      h("div", { style: "height:1px;background:var(--border);margin:0.25rem 0;" }),
-      h("div", { style: "display:flex;flex-direction:column;gap:0.4rem;" }, nsRows),
-    ]);
+        buildNodeNamespaces(nodeNamespaces),
+      ]) : null,
+    ].filter(Boolean));
   });
 
-  const nodesGrid = h("div", {
-    style: "display:grid;grid-template-columns:repeat(auto-fit, minmax(380px, 1fr));gap:1.1rem;"
-  }, nodeCardsList);
+  const nodesGrid = h("div", { class: "cmap-grid" }, nodeCardsList);
 
-  renderInto(container, h("div", {}, [statsRow, legendBar, nodesGrid]));
+  renderInto(container, h("div", {}, [stats, legendBar, nodesGrid]));
+
+  // Trigger the gauge-ring entrance animation one frame after mount --
+  // setting the target value in the same synchronous pass as creation would
+  // paint straight to the final state with nothing to transition from.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      container.querySelectorAll(".cmap-gauge__fill").forEach((el) => {
+        el.style.strokeDashoffset = el.dataset.targetOffset;
+      });
+    });
+  });
 }
 
 async function loadClustersView() {
@@ -1484,9 +1597,9 @@ async function loadClustersView() {
   const activeCluster = clusters.find((c) => c.id === state.selectedClusterId) || clusters[0];
 
   const statsRow = statGrid([
-    statCard("Total Clusters", String(totalCount), `${cloudCount} Cloud, ${localCount} Local / Kind`),
-    statCard("Active Cluster", activeCluster ? activeCluster.name : "None", activeCluster ? `Connected (${activeCluster.environment})` : "Disconnected"),
-    statCard("Providers", String(new Set(clusters.map((c) => c.provider)).size), "GCP, AWS, Azure & Local"),
+    statCard("Total Clusters", String(totalCount), `${cloudCount} Cloud, ${localCount} Local / Kind`, STAT_ICONS.grid),
+    statCard("Active Cluster", activeCluster ? activeCluster.name : "None", activeCluster ? `Connected (${activeCluster.environment})` : "Disconnected", STAT_ICONS.pulse),
+    statCard("Providers", String(new Set(clusters.map((c) => c.provider)).size), "GCP, AWS, Azure & Local", STAT_ICONS.cloud),
   ]);
 
   const searchInput = h("input", {
@@ -1542,7 +1655,7 @@ async function loadClustersView() {
           h("div", { style: "display:flex;align-items:center;gap:12px;" }, [
             h("div", {
               style: `width:42px;height:42px;border-radius:12px;background:${providerColor}18;color:${providerColor};display:flex;align-items:center;justify-content:center;flex-shrink:0;`,
-              dangerouslySetInnerHTML: { __html: icon }
+              html: icon
             }),
             h("div", {}, [
               h("h3", { style: "font-size:0.98rem;font-weight:700;margin:0;color:var(--fg);" }, c.name),
@@ -1642,110 +1755,6 @@ async function loadClustersView() {
   renderCards();
 
   renderInto(container, h("div", {}, [statsRow, searchContainer, cardsContainer]));
-}
-
-// -- view: fleet overview ----------------------------------------------------
-
-async function loadFleetOverview() {
-  const container = $("fleet-content");
-  const token = nextLoadToken("fleet");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getFleetOverview();
-    if (isStaleToken("fleet", token)) return;
-    renderFleetOverview(data);
-  } catch (err) {
-    if (isStaleToken("fleet", token)) return;
-    renderInto(container, errorState(err, loadFleetOverview));
-  }
-}
-
-function renderFleetOverview(data) {
-  const container = $("fleet-content");
-  const summary = data.summary || { total_clusters: 0, healthy_clusters: 0, total_nodes: 0, total_pods: 0, fleet_health_score: 100 };
-  const clusters = data.clusters || [];
-
-  const stats = statGrid([
-    statCard("Fleet Health Score", `${summary.fleet_health_score}%`, [pill(summary.fleet_health_score >= 80 ? "Healthy" : "Attention Required", summary.fleet_health_score >= 80 ? "healthy" : "critical")]),
-    statCard("Clusters", `${summary.healthy_clusters}/${summary.total_clusters} Healthy`),
-    statCard("Total Nodes", summary.total_nodes),
-    statCard("Total Pods", summary.total_pods),
-  ]);
-
-  const cards = clusters.map((c) => {
-    const isCurrent = c.id === state.selectedClusterId;
-    const providerColor = PROVIDER_COLORS[c.provider] || "#64748b";
-    const envColor = ENV_PILL_COLORS[c.environment] || ENV_PILL_COLORS.default;
-    const icon = PROVIDER_ICONS[c.provider] || PROVIDER_ICONS.local;
-    const isHealthy = c.health_score >= 80;
-
-    return h("div", {
-      className: "fleet-card",
-      style: `border-color: ${isCurrent ? "var(--accent)" : "var(--border)"};`
-    }, [
-      h("div", { style: "display:flex;align-items:center;justify-content:space-between;" }, [
-        h("div", { style: "display:flex;align-items:center;gap:10px;" }, [
-          h("div", { style: `width:36px;height:36px;border-radius:10px;background:${providerColor}18;color:${providerColor};display:flex;align-items:center;justify-content:center;` }, [
-            h("span", { innerHTML: icon })
-          ]),
-          h("div", {}, [
-            h("div", { style: "font-weight:700;font-size:1rem;color:var(--fg);" }, c.name),
-            h("div", { style: "font-size:0.75rem;color:var(--fg-subtle);" }, `Provider: ${c.provider.toUpperCase()} · ID: ${c.id}`)
-          ])
-        ]),
-        h("span", { style: `font-size:0.68rem;font-weight:700;padding:2px 8px;border-radius:99px;background:${envColor}20;color:${envColor};text-transform:uppercase;` }, c.environment)
-      ]),
-
-      h("div", {}, [
-        h("div", { style: "display:flex;justify-content:space-between;font-size:0.78rem;font-weight:600;margin-bottom:4px;" }, [
-          h("span", { style: "color:var(--fg-muted);" }, "Cluster Health"),
-          h("span", { style: `color:${isHealthy ? "var(--success)" : "var(--danger)"};` }, `${c.health_score}% (${c.health_status})`)
-        ]),
-        h("div", { className: "fleet-health-meter" }, [
-          h("div", {
-            className: "fleet-health-segment",
-            style: `width:${c.health_score}%;background:${isHealthy ? "var(--accent)" : "var(--danger)"};`
-          })
-        ])
-      ]),
-
-      h("div", { style: "display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;padding:8px;border-radius:8px;background:var(--bg-inset);font-size:0.8rem;text-align:center;" }, [
-        h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;" }, "Nodes"),
-          h("div", { style: "font-weight:700;font-size:0.95rem;color:var(--fg);margin-top:2px;" }, String(c.node_count || 0))
-        ]),
-        h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;" }, "Pods"),
-          h("div", { style: "font-weight:700;font-size:0.95rem;color:var(--fg);margin-top:2px;" }, String(c.pod_count || 0))
-        ]),
-        h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;" }, "Namespaces"),
-          h("div", { style: "font-weight:700;font-size:0.95rem;color:var(--fg);margin-top:2px;" }, String(c.namespace_count || 0))
-        ])
-      ]),
-
-      c.alerts && c.alerts.length ? h("div", { style: "padding:6px 10px;border-radius:6px;background:rgba(217,48,37,0.08);color:var(--danger);font-size:0.75rem;display:flex;align-items:center;gap:6px;" }, [
-        h("span", { style: "font-weight:700;" }, "ALERT:"),
-        h("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, c.alerts[0])
-      ]) : null,
-
-      h("div", { style: "display:flex;justify-content:flex-end;margin-top:auto;" }, [
-        isCurrent ? h("span", { style: "font-size:0.78rem;font-weight:700;color:var(--accent);display:inline-flex;align-items:center;gap:4px;" }, [
-          h("span", { style: "width:6px;height:6px;border-radius:50%;background:var(--accent);" }),
-          "Active Cluster"
-        ]) : h("button", {
-          className: "btn btn--primary btn--sm",
-          onclick: async () => {
-            await connectToCluster(c.id);
-            switchView("overview");
-          }
-        }, "Connect & View")
-      ])
-    ].filter(Boolean));
-  });
-
-  const grid = h("div", { className: "fleet-grid", style: "margin-top:1.25rem;" }, cards);
-  renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, grid]));
 }
 
 // -- view: logical applications -----------------------------------------------
@@ -1848,9 +1857,9 @@ function renderDiagnosticsRCA(data) {
   const rootCauses = data.root_causes || [];
 
   const stats = statGrid([
-    statCard("Cluster Health Score", `${summary.overall_score}%`, [pill(summary.overall_score >= 80 ? "Healthy" : "Anomalies Detected", summary.overall_score >= 80 ? "healthy" : "critical")]),
-    statCard("Folded Root Causes", summary.active_root_causes, [pill(`${rootCauses.reduce((acc, r) => acc + (r.folded_failures?.length || 1), 0)} Raw Symptoms Folded`, "info")]),
-    statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`),
+    statCard("Cluster Health Score", `${summary.overall_score}%`, [pill(summary.overall_score >= 80 ? "Healthy" : "Anomalies Detected", summary.overall_score >= 80 ? "healthy" : "critical")], STAT_ICONS.pulse),
+    statCard("Folded Root Causes", summary.active_root_causes, [pill(`${rootCauses.reduce((acc, r) => acc + (r.folded_failures?.length || 1), 0)} Raw Symptoms Folded`, "info")], STAT_ICONS.funnel),
+    statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`, null, STAT_ICONS.shieldCheck),
   ]);
 
   if (!rootCauses.length) {
@@ -2458,7 +2467,6 @@ async function loadResourceMap() {
 }
 
 const viewLoaders = {
-  fleet: loadFleetOverview,
   overview: loadOverview,
   clusters: loadClustersView,
   applications: loadLogicalApplications,
@@ -2670,7 +2678,6 @@ function wireStaticControls() {
     renderWorkloadCatalog();
   });
   $("applications-namespace-select")?.addEventListener("change", () => state.activeView === "applications" && loadLogicalApplications());
-  $("fleet-refresh-btn")?.addEventListener("click", () => state.activeView === "fleet" && loadFleetOverview());
   $("diagnostics-reanalyze-btn")?.addEventListener("click", () => state.activeView === "diagnostics" && loadDiagnosticsRCA());
   $("audit-type-select")?.addEventListener("change", () => state.activeView === "audit" && loadAuditLogsView());
 
@@ -2751,10 +2758,16 @@ function wireStaticControls() {
 // ------------------------------------------------------------------ //
 // Cluster Connections Sidebar Panel
 // ------------------------------------------------------------------ //
+// Same official brand marks as PROVIDER_GLYPHS in components.js (Google's
+// Cloud glyph, the AWS smile cropped from its wordmark, Microsoft's Azure
+// glyph) -- this is a separate, smaller (14px, currentColor fill) rendering
+// used in the sidebar's active-cluster card and the "All Clusters" list, so
+// it's kept as its own object rather than forcing those call sites onto
+// components.js's gradient-circle badge layout.
 const PROVIDER_ICONS = {
-  gke: `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>`,
-  eks: `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`,
-  aks: `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>`,
+  gke: `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor;"><path d="M12.19 2.38a9.344 9.344 0 0 0-9.234 6.893c.053-.02-.055.013 0 0-3.875 2.551-3.922 8.11-.247 10.941l.006-.007-.007.03a6.717 6.717 0 0 0 4.077 1.356h5.173l.03.03h5.192c6.687.053 9.376-8.605 3.835-12.35a9.365 9.365 0 0 0-2.821-4.552l-.043.043.006-.05A9.344 9.344 0 0 0 12.19 2.38zm-.358 4.146c1.244-.04 2.518.368 3.486 1.15a5.186 5.186 0 0 1 1.862 4.078v.518c3.53-.07 3.53 5.262 0 5.193h-5.193l-.008.009v-.04H6.785a2.59 2.59 0 0 1-1.067-.23h.001a2.597 2.597 0 1 1 3.437-3.437l3.013-3.012A6.747 6.747 0 0 0 8.11 8.24c.018-.01.04-.026.054-.023a5.186 5.186 0 0 1 3.67-1.69z"/></svg>`,
+  eks: `<svg viewBox="-0.5 13 25.3 6.8" style="width:16px;height:14px;fill:currentColor;"><path d="M21.698 16.207c-2.626 1.94-6.442 2.969-9.722 2.969-4.598 0-8.74-1.7-11.87-4.526-.247-.223-.024-.527.272-.351 3.384 1.963 7.559 3.153 11.877 3.153 2.914 0 6.114-.607 9.06-1.852.439-.2.814.287.383.607zM22.792 14.961c-.336-.43-2.22-.207-3.074-.103-.255.032-.295-.192-.063-.36 1.5-1.053 3.967-.75 4.254-.399.287.36-.08 2.826-1.485 4.007-.215.184-.423.088-.327-.151.32-.79 1.03-2.57.695-2.994z"/></svg>`,
+  aks: `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor;"><path d="M22.379 23.343a1.62 1.62 0 0 0 1.536-2.14v.002L17.35 1.76A1.62 1.62 0 0 0 15.816.657H8.184A1.62 1.62 0 0 0 6.65 1.76L.086 21.204a1.62 1.62 0 0 0 1.536 2.139h4.741a1.62 1.62 0 0 0 1.535-1.103l.977-2.892 4.947 3.675c.28.208.618.32.966.32m-3.084-12.531 3.624 10.739a.54.54 0 0 1-.51.713v-.001h-.03a.54.54 0 0 1-.322-.106l-9.287-6.9h4.853m6.313 7.006c.116-.326.13-.694.007-1.058L9.79 1.76a1.722 1.722 0 0 0-.007-.02h6.034a.54.54 0 0 1 .512.366l6.562 19.445a.54.54 0 0 1-.338.684"/></svg>`,
   local: `<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>`,
 };
 const PROVIDER_COLORS = { gke: "var(--provider-gke)", eks: "var(--provider-eks)", aks: "var(--provider-aks)", local: "var(--provider-local)" };
@@ -3054,7 +3067,7 @@ function initOnboardModal() {
       $("onboard-environment").value = val;
       document.querySelectorAll(".env-pill-opt").forEach((pill) => {
         const isMatch = pill.dataset.val === val;
-        pill.style.background = isMatch ? "var(--accent-soft)" : "transparent";
+        pill.style.background = isMatch ? "var(--grad-pill-selected)" : "transparent";
         pill.style.borderColor = isMatch ? "var(--accent)" : "var(--border)";
         pill.style.color = isMatch ? "var(--accent)" : "var(--fg-muted)";
       });

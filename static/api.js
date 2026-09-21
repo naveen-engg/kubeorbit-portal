@@ -126,8 +126,6 @@ export const api = {
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/manifest${qs({ namespace, kind, name })}`),
 
   // Enterprise Extensions
-  getFleetOverview: () => apiFetch("/api/fleet/overview"),
-
   getWorkloadsCatalog: (clusterId, namespace) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/workloads/catalog${qs({ namespace })}`),
 

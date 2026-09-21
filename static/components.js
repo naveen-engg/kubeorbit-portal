@@ -53,18 +53,40 @@ function iconWrap(name) {
   return h("div", { class: "icon-wrap" }, icon(name));
 }
 
-// Small, original geometric glyphs (not the providers' trademarked logos) so
-// each cloud badge is visually distinct at a glance while its background
-// gradient still carries that provider's real brand colors.
+// Providers' actual brand marks (Microsoft's official Azure glyph, Google's
+// official Cloud glyph -- both trace exactly, full precision) rather than
+// abstract approximations. AWS has no standalone pictorial mark in its brand
+// kit (its logo is the "aws" wordmark plus the smile underline as one
+// unit) -- full precision there too, just cropped to the smile/arrow
+// portion via viewBox instead of scaling the whole wordmark, since the
+// wordmark's letterforms turn to mud below ~40px and every call site here
+// renders this at 11-20px. Local gets a terminal glyph (a local kubeconfig
+// context, not a cloud, so no brand mark applies). Colors come from the
+// badge's own gradient; each entry carries its own viewBox since the AWS
+// crop isn't the standard 0 0 24 24.
 const PROVIDER_GLYPHS = {
-  gke: '<path d="M12 2 22 12 12 22 2 12z"/>',
-  eks: '<path d="M12 2 20.5 7v10L12 22 3.5 17V7z"/>',
-  aks: '<path d="M12 3 21 20H3z"/>',
+  gke: {
+    viewBox: "0 0 24 24",
+    html: '<path d="M12.19 2.38a9.344 9.344 0 0 0-9.234 6.893c.053-.02-.055.013 0 0-3.875 2.551-3.922 8.11-.247 10.941l.006-.007-.007.03a6.717 6.717 0 0 0 4.077 1.356h5.173l.03.03h5.192c6.687.053 9.376-8.605 3.835-12.35a9.365 9.365 0 0 0-2.821-4.552l-.043.043.006-.05A9.344 9.344 0 0 0 12.19 2.38zm-.358 4.146c1.244-.04 2.518.368 3.486 1.15a5.186 5.186 0 0 1 1.862 4.078v.518c3.53-.07 3.53 5.262 0 5.193h-5.193l-.008.009v-.04H6.785a2.59 2.59 0 0 1-1.067-.23h.001a2.597 2.597 0 1 1 3.437-3.437l3.013-3.012A6.747 6.747 0 0 0 8.11 8.24c.018-.01.04-.026.054-.023a5.186 5.186 0 0 1 3.67-1.69z"/>',
+  },
+  eks: {
+    viewBox: "-0.5 13 25.3 6.8",
+    html: '<path d="M21.698 16.207c-2.626 1.94-6.442 2.969-9.722 2.969-4.598 0-8.74-1.7-11.87-4.526-.247-.223-.024-.527.272-.351 3.384 1.963 7.559 3.153 11.877 3.153 2.914 0 6.114-.607 9.06-1.852.439-.2.814.287.383.607zM22.792 14.961c-.336-.43-2.22-.207-3.074-.103-.255.032-.295-.192-.063-.36 1.5-1.053 3.967-.75 4.254-.399.287.36-.08 2.826-1.485 4.007-.215.184-.423.088-.327-.151.32-.79 1.03-2.57.695-2.994z"/>',
+  },
+  aks: {
+    viewBox: "0 0 24 24",
+    html: '<path d="M22.379 23.343a1.62 1.62 0 0 0 1.536-2.14v.002L17.35 1.76A1.62 1.62 0 0 0 15.816.657H8.184A1.62 1.62 0 0 0 6.65 1.76L.086 21.204a1.62 1.62 0 0 0 1.536 2.139h4.741a1.62 1.62 0 0 0 1.535-1.103l.977-2.892 4.947 3.675c.28.208.618.32.966.32m-3.084-12.531 3.624 10.739a.54.54 0 0 1-.51.713v-.001h-.03a.54.54 0 0 1-.322-.106l-9.287-6.9h4.853m6.313 7.006c.116-.326.13-.694.007-1.058L9.79 1.76a1.722 1.722 0 0 0-.007-.02h6.034a.54.54 0 0 1 .512.366l6.562 19.445a.54.54 0 0 1-.338.684"/>',
+  },
+  local: {
+    viewBox: "0 0 24 24",
+    html: '<rect x="4" y="5" width="16" height="12" rx="1.5" fill="none" stroke="white" stroke-width="2"/><path d="m8 9.5 2.5 2.5L8 14.5M13 14.5h3" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  },
 };
 
 function providerIcon(provider) {
   const p = (provider || "").toLowerCase();
-  return h("span", { class: `badge__icon-wrap badge__icon-wrap--${p}` }, h("svg", { class: "badge__icon", viewBox: "0 0 24 24", fill: "white", html: PROVIDER_GLYPHS[p] || "" }));
+  const glyph = PROVIDER_GLYPHS[p] || { viewBox: "0 0 24 24", html: "" };
+  return h("span", { class: `badge__icon-wrap badge__icon-wrap--${p}` }, h("svg", { class: "badge__icon", viewBox: glyph.viewBox, fill: "white", html: glyph.html }));
 }
 
 export function clear(container) {
@@ -131,8 +153,27 @@ export function envChip(env) {
 
 // -- stat cards -----------------------------------------------------------
 
-export function statCard(label, value, sub) {
-  const children = [h("div", { class: "stat-card__label" }, label), h("div", { class: "stat-card__value" }, String(value))];
+// Cards used to be forced into equal grid columns with one fixed value
+// font-size, so a short value like "2" got the same box as "Not configured"
+// -- the long ones wrapped into a cramped multi-line mess. Sizing the value
+// text down as it gets longer (and letting .stat-grid's flexbox give each
+// card its own width -- see styles.css) keeps every value on one line
+// without every card being forced to match the widest one.
+function statValueSizeClass(text) {
+  const len = text.length;
+  if (len > 13) return "stat-card__value--xs";
+  if (len > 8) return "stat-card__value--sm";
+  if (len > 4) return "stat-card__value--md";
+  return "";
+}
+
+export function statCard(label, value, sub, icon) {
+  const text = String(value);
+  const labelEl = h("span", { class: "stat-card__label" }, label);
+  const header = icon
+    ? h("div", { class: "stat-card__header" }, [h("span", { class: "stat-card__icon", html: icon }), labelEl])
+    : labelEl;
+  const children = [header, h("div", { class: `stat-card__value ${statValueSizeClass(text)}`.trim() }, text)];
   if (sub) children.push(h("div", { class: "stat-card__sub" }, sub));
   return h("div", { class: "stat-card" }, children);
 }
