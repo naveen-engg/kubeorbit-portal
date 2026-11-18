@@ -10,7 +10,6 @@ clusters.yaml/
 *.log
 .DS_Store
 .claude/
-artifacts/
 .pytest_cache/
 
 # Terraform state, provider binaries, and local variable files
