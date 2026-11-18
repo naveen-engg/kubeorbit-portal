@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import shutil
-import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -30,7 +29,7 @@ class LocalProvider(BaseKubeProvider):
     async def authenticate(self, user=None) -> ClusterAuthResult:
         src_raw = self.cluster.config.get("kubeconfig_path", "~/.kube/config")
         src_path = os.path.expanduser(src_raw)
-        
+
         # Ensure parent directory for isolated kubeconfig exists
         Path(self.kubeconfig_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -40,14 +39,14 @@ class LocalProvider(BaseKubeProvider):
                 with open(src_path, "r", encoding="utf-8") as f:
                     cfg = yaml.safe_load(f) or {}
 
-                is_linux = sys.platform.startswith("linux") or os.name != "nt"
+                # Only rewrite 127.0.0.1 -> host.docker.internal when actually inside a Docker container
+                in_docker = os.path.exists("/.dockerenv") or os.environ.get("KUBEORBIT_IN_DOCKER") == "true"
                 minikube_dir = str(Path.home() / ".minikube").replace("\\", "/")
 
                 for c in cfg.get("clusters", []):
                     cl = c.get("cluster", {})
                     if "server" in cl and isinstance(cl["server"], str):
-                        # Inside Docker containers, map localhost to host.docker.internal
-                        if is_linux and ("127.0.0.1" in cl["server"] or "localhost" in cl["server"]):
+                        if in_docker and ("127.0.0.1" in cl["server"] or "localhost" in cl["server"]):
                             cl["server"] = cl["server"].replace("127.0.0.1", "host.docker.internal").replace("localhost", "host.docker.internal")
                             cl["insecure-skip-tls-verify"] = True
                             cl.pop("certificate-authority", None)
@@ -70,6 +69,27 @@ class LocalProvider(BaseKubeProvider):
                                 usr[key] = minikube_dir + "/" + val[idx + len(".minikube"):].lstrip("/")
                             else:
                                 usr[key] = val
+                    if os.name != "nt":
+                        exec_cfg = usr.get("exec")
+                        if isinstance(exec_cfg, dict) and isinstance(exec_cfg.get("command"), str):
+                            cmd_str = exec_cfg["command"].replace("\\", "/")
+                            if cmd_str.lower().endswith(".exe") or ":" in cmd_str:
+                                exec_cfg["command"] = cmd_str.split("/")[-1].removesuffix(".exe").removesuffix(".EXE")
+                            if "gke-gcloud-auth-plugin" in exec_cfg["command"]:
+                                adc_file = os.environ.get(
+                                    "GOOGLE_APPLICATION_CREDENTIALS",
+                                    str(Path.home() / ".config" / "gcloud" / "application_default_credentials.json"),
+                                )
+                                if os.path.exists(adc_file):
+                                    args = list(exec_cfg.get("args") or [])
+                                    if "--use_application_default_credentials" not in args:
+                                        args.append("--use_application_default_credentials")
+                                    exec_cfg["args"] = args
+                        ap_cfg = (usr.get("auth-provider") or {}).get("config")
+                        if isinstance(ap_cfg, dict) and isinstance(ap_cfg.get("cmd-path"), str):
+                            cp_str = ap_cfg["cmd-path"].replace("\\", "/")
+                            if cp_str.lower().endswith(".exe") or ":" in cp_str:
+                                ap_cfg["cmd-path"] = cp_str.split("/")[-1].removesuffix(".exe").removesuffix(".EXE")
 
                 with open(self.kubeconfig_path, "w", encoding="utf-8") as f:
                     yaml.dump(cfg, f)
@@ -148,17 +168,15 @@ class LocalProvider(BaseKubeProvider):
             kubernetes_version=k8s_version or "v1.30.0",
             location="local",
             status="RUNNING",
-            node_pools=[NodePoolInfo(name="local-pool", node_count=node_count)],
-            console_url=self.get_console_url(),
+            node_pools=[
+                NodePoolInfo(
+                    name="default-pool",
+                    node_count=node_count,
+                    machine_type="local-host",
+                    zones=["local"],
+                    autoscaling=False,
+                )
+            ],
+            console_url=None,
             workload_identity=self.get_workload_identity_info(),
-            network={
-                "api_server_endpoint": None,
-                "vpc_id": None,
-                "pod_cidr": None,
-                "service_cidr": None,
-                "cni": None,
-                "network_policy": None,
-                "private_cluster": False,
-            },
-            extra={"features": []},
         )

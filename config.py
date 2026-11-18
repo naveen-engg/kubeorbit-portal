@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import tempfile
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +29,8 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger("kubeorbit.config")
+
+_config_write_lock = threading.Lock()
 
 DEFAULT_EXCLUDED_NAMESPACE_PATTERNS = [
     "kube-system",
@@ -78,10 +82,19 @@ class EnvironmentGroup(BaseModel):
     clusters: List[ClusterConfig] = Field(default_factory=list)
 
 
+class TeamRBAC(BaseModel):
+    """3-Tier per-team RBAC mapping (Admin: cluster CRUD, Operator: secret reveal & rollback, Viewer: read-only)."""
+
+    admins: List[str] = Field(default_factory=list)
+    operators: List[str] = Field(default_factory=list)
+    viewers: List[str] = Field(default_factory=list)
+
+
 class TeamConfig(BaseModel):
     id: str
     name: str
     environments: List[EnvironmentGroup] = Field(default_factory=list)
+    rbac: Optional[TeamRBAC] = None
 
 
 class AppSettings(BaseModel):
@@ -94,12 +107,6 @@ class AppSettings(BaseModel):
     cluster_meta_cache_ttl_seconds: int = 120
     auth_cache_ttl_seconds: int = 600
     cli_timeout_seconds: int = 45
-    # Label keys tried in order (first match wins) to correlate a workload to
-    # a logical "application" in get_logical_applications(); falls back to
-    # splitting the resource name on its first hyphen if none match. Kept
-    # configurable (rather than hardcoded) since every org labels
-    # differently -- e.g. a team using Kustomize's `app.kubernetes.io/name`
-    # everywhere, or a legacy `team`/`service` label instead of `app`.
     app_correlation_label_keys: List[str] = Field(
         default_factory=lambda: ["app.kubernetes.io/part-of", "app.kubernetes.io/name", "app", "tier"]
     )
@@ -155,6 +162,12 @@ class ConfigStore:
             raise KeyError(cluster_id)
         return cluster
 
+    def get_team(self, team_id: str) -> Optional[TeamConfig]:
+        for t in self.teams:
+            if t.id == team_id:
+                return t
+        return None
+
     def list_clusters(self) -> List[ClusterConfig]:
         return list(self._clusters_by_id.values())
 
@@ -191,75 +204,98 @@ def add_cluster_to_config(
     environment: str,
     cluster_data: Dict[str, Any],
 ) -> ConfigStore:
-    path = get_config_path()
-    raw_dict = _load_yaml(path)
-    teams = raw_dict.setdefault("teams", [])
+    with _config_write_lock:
+        path = get_config_path()
+        raw_dict = _load_yaml(path)
+        teams = raw_dict.setdefault("teams", [])
 
-    team_obj = None
-    for t in teams:
-        if t.get("id") == team_id:
-            team_obj = t
-            break
-    if not team_obj:
-        team_obj = {"id": team_id, "name": team_name or team_id.title(), "environments": []}
-        teams.append(team_obj)
+        team_obj = None
+        for t in teams:
+            if t.get("id") == team_id:
+                team_obj = t
+                break
+        if not team_obj:
+            team_obj = {"id": team_id, "name": team_name or team_id.title(), "environments": []}
+            teams.append(team_obj)
 
-    envs = team_obj.setdefault("environments", [])
-    env_obj = None
-    for e in envs:
-        if e.get("id") == environment:
-            env_obj = e
-            break
-    if not env_obj:
-        env_obj = {"id": environment, "clusters": []}
-        envs.append(env_obj)
+        envs = team_obj.setdefault("environments", [])
+        env_obj = None
+        for e in envs:
+            if e.get("id") == environment:
+                env_obj = e
+                break
+        if not env_obj:
+            env_obj = {"id": environment, "clusters": []}
+            envs.append(env_obj)
 
-    clusters = env_obj.setdefault("clusters", [])
-    clusters = [c for c in clusters if c.get("id") != cluster_data["id"]]
-    clusters.append(cluster_data)
-    env_obj["clusters"] = clusters
+        clusters = env_obj.setdefault("clusters", [])
+        target_id = (cluster_data.get("id") or "").strip()
+        # Remove any duplicate with the same ID across OTHER teams/environments first
+        for t in teams:
+            for e in t.get("environments", []):
+                if t is team_obj and e is env_obj:
+                    continue
+                e["clusters"] = [c for c in e.get("clusters", []) if c.get("id") != target_id]
+        # Update in-place if already in target environment to preserve card order, else append
+        replaced = False
+        new_clusters = []
+        for c in clusters:
+            if c.get("id") == target_id:
+                if not replaced:
+                    new_clusters.append(cluster_data)
+                    replaced = True
+            else:
+                new_clusters.append(c)
+        if not replaced:
+            new_clusters.append(cluster_data)
+        env_obj["clusters"] = new_clusters
 
-    save_config(raw_dict)
-    return get_config_store()
+        save_config(raw_dict)
+        return get_config_store()
 
 
 def delete_cluster_from_config(cluster_id: str) -> ConfigStore:
-    path = get_config_path()
-    raw_dict = _load_yaml(path)
-    teams = raw_dict.get("teams", [])
-    target = cluster_id.strip().lower()
-    for t in teams:
-        for e in t.get("environments", []):
-            clusters = e.get("clusters", [])
-            new_clusters = []
-            for c in clusters:
-                c_id = (c.get("id") or "").strip().lower()
-                c_name = (c.get("name") or "").strip().lower()
-                if c_id == target or c_name == target or c_id.replace(" ", "-") == target:
-                    continue
-                new_clusters.append(c)
-            e["clusters"] = new_clusters
+    with _config_write_lock:
+        path = get_config_path()
+        raw_dict = _load_yaml(path)
+        teams = raw_dict.get("teams", [])
+        target = cluster_id.strip().lower()
+        for t in teams:
+            for e in t.get("environments", []):
+                clusters = e.get("clusters", [])
+                new_clusters = []
+                for c in clusters:
+                    c_id = (c.get("id") or "").strip().lower()
+                    c_name = (c.get("name") or "").strip().lower()
+                    if c_id == target or c_name == target or c_id.replace(" ", "-") == target:
+                        continue
+                    new_clusters.append(c)
+                e["clusters"] = new_clusters
 
-    save_config(raw_dict)
+        save_config(raw_dict)
 
-    # Clean up isolated kubeconfig file if it exists
-    try:
-        env = get_runtime_env()
-        kcfg_file = env.kubeconfig_home / f"{cluster_id}.yaml"
-        if kcfg_file.exists():
-            kcfg_file.unlink(missing_ok=True)
-    except Exception as exc:
-        logger.warning("Could not delete isolated kubeconfig for '%s': %s", cluster_id, exc)
+        # Clean up isolated kubeconfig file if it exists (only if cluster_id is URL-safe)
+        if re.match(r"^[a-z0-9][a-z0-9-]*$", target):
+            try:
+                env = get_runtime_env()
+                kcfg_file = env.kubeconfig_home / f"{target}.yaml"
+                if kcfg_file.exists():
+                    kcfg_file.unlink(missing_ok=True)
+            except Exception as exc:
+                logger.warning("Could not delete isolated kubeconfig for '%s': %s", cluster_id, exc)
 
-    return get_config_store()
-
+        return get_config_store()
 
 
 def _load_from_secret_manager() -> Optional[Dict[str, Any]]:
     if os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() != "true":
         return None
-    project_id = os.environ.get("GCP_PROJECT_ID", "project-4bc40d10-9765-40c3-805")
-    secret_id = os.environ.get("GCP_SECRET_NAME", "kubeorbit-cluster-config")
+    project_id = (
+        os.environ.get("GCP_PROJECT_ID")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or "adk-enterprise-observability"
+    ).strip()
+    secret_id = os.environ.get("GCP_SECRET_NAME", "kubeorbit-clusters-yaml").strip()
     try:
         from google.cloud import secretmanager
         client = secretmanager.SecretManagerServiceClient()
@@ -276,7 +312,6 @@ def _load_from_secret_manager() -> Optional[Dict[str, Any]]:
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
-    # Try GCP Secret Manager only if explicitly enabled via USE_GCP_SECRET_MANAGER=true
     secret_data = _load_from_secret_manager()
     if secret_data is not None:
         return secret_data
@@ -297,20 +332,34 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 
 def save_config(raw_data: Dict[str, Any]) -> None:
-    """Save updated config dictionary to local YAML file (and GCP Secret Manager if USE_GCP_SECRET_MANAGER=true)."""
+    """Atomically save updated config dictionary to local YAML file (and GCP Secret Manager if enabled)."""
     yaml_str = yaml.dump(raw_data, sort_keys=False)
-    
-    # 1. Update local file
+
+    # 1. Atomic write to local file via temp file in same directory + os.replace
     path = get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        fh.write(yaml_str)
+    fd, tmp_name = tempfile.mkstemp(prefix=".clusters-", suffix=".yaml.tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(yaml_str)
+            fh.flush()
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     logger.info("Saved updated config to local file '%s'", path)
 
     # 2. Update GCP Secret Manager if explicitly enabled
     if os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() == "true":
-        project_id = os.environ.get("GCP_PROJECT_ID", "project-4bc40d10-9765-40c3-805")
-        secret_id = os.environ.get("GCP_SECRET_NAME", "kubeorbit-cluster-config")
+        project_id = (
+            os.environ.get("GCP_PROJECT_ID")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT")
+            or "adk-enterprise-observability"
+        ).strip()
+        secret_id = os.environ.get("GCP_SECRET_NAME", "kubeorbit-clusters-yaml").strip()
         try:
             from google.cloud import secretmanager
             client = secretmanager.SecretManagerServiceClient()
@@ -324,7 +373,6 @@ def save_config(raw_data: Dict[str, Any]) -> None:
 
     # 3. Reload cached config store
     reload_config_store()
-
 
 
 @lru_cache(maxsize=1)
@@ -361,11 +409,46 @@ class RuntimeEnv:
 
     auth_mode: str = field(default_factory=lambda: os.environ.get("KUBEORBIT_AUTH_MODE", "none"))
     api_key: Optional[str] = field(default_factory=lambda: os.environ.get("KUBEORBIT_API_KEY"))
-    # os.path.expanduser, not a bare Path(...): Path() never expands a
-    # leading "~" on its own, so KUBEORBIT_KUBECONFIG_HOME=~/.kubeorbit/... in
-    # .env (a literal, unexpanded string once python-dotenv reads it) created
-    # a real directory named "~" in the working directory instead of
-    # resolving to the home folder.
+    iap_audience: Optional[str] = field(default_factory=lambda: os.environ.get("KUBEORBIT_IAP_AUDIENCE"))
+    admin_emails: List[str] = field(
+        default_factory=lambda: [
+            e.strip().lower()
+            for e in os.environ.get("KUBEORBIT_ADMIN_EMAILS", "").split(",")
+            if e.strip()
+        ]
+    )
+    operator_emails: List[str] = field(
+        default_factory=lambda: [
+            e.strip().lower()
+            for e in os.environ.get("KUBEORBIT_OPERATOR_EMAILS", "").split(",")
+            if e.strip()
+        ]
+    )
+    viewer_emails: List[str] = field(
+        default_factory=lambda: [
+            e.strip().lower()
+            for e in os.environ.get("KUBEORBIT_VIEWER_EMAILS", "").split(",")
+            if e.strip()
+        ]
+    )
+    gcp_iam_rbac_enabled: bool = field(
+        default_factory=lambda: os.environ.get("KUBEORBIT_GCP_IAM_RBAC", "false").lower() == "true"
+    )
+    strict_rbac: bool = field(
+        default_factory=lambda: os.environ.get("KUBEORBIT_STRICT_RBAC", "false").lower() == "true"
+    )
+    gcp_project_id: str = field(
+        default_factory=lambda: (
+            os.environ.get("GOOGLE_CLOUD_PROJECT")
+            or os.environ.get("GCP_PROJECT_ID")
+            or "adk-enterprise-observability"
+        ).strip()
+    )
+    disable_local_provider: bool = field(
+        default_factory=lambda: os.environ.get("KUBEORBIT_DISABLE_LOCAL_PROVIDER", "").lower() == "true"
+        or os.environ.get("KUBEORBIT_AUTH_MODE", "none").lower() == "iap"
+        or bool(os.environ.get("K_SERVICE"))
+    )
     kubeconfig_home: Path = field(
         default_factory=lambda: Path(
             os.path.expanduser(os.environ.get("KUBEORBIT_KUBECONFIG_HOME", str(Path.home() / ".kubeorbit" / "kubeconfigs")))
@@ -387,4 +470,3 @@ class RuntimeEnv:
 @lru_cache(maxsize=1)
 def get_runtime_env() -> RuntimeEnv:
     return RuntimeEnv()
-

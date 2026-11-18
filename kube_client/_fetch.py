@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ._cache import _cache, _kubectl_semaphore
 from ._cli import ResourceTypeUnavailableError, run_cli
-from ._sdk import _api_client_pool, _sync_sdk_list
+from ._sdk import _api_client_pool, _pool_lock, _sync_sdk_list
 
 
 async def kubectl_json(
@@ -38,16 +38,21 @@ async def cached_kubectl_list(
     """Returns (items, available). `available=False` means the resource type
     doesn't exist on this cluster (only meaningful when optional=True)."""
     ns_key = namespace or "_all_"
-    cache_key = f"{context}:{resource}:{ns_key}:{','.join(extra_args or [])}"
+    kcfg_key = kubeconfig_path.stem if kubeconfig_path else "default"
+    cache_key = f"{context}:{kcfg_key}:{resource}:{ns_key}:{','.join(extra_args or [])}"
 
     async def factory():
-        # 1. Fast-path: Try in-process Python Kubernetes client library
+        # 1. Fast-path: Try in-process Python Kubernetes client library (with 10s timeout)
         if not extra_args:
-            items, is_handled = await asyncio.to_thread(
-                _sync_sdk_list, context, kubeconfig_path, resource, namespace
-            )
-            if is_handled and items is not None:
-                return {"items": items, "available": True}
+            try:
+                items, is_handled = await asyncio.wait_for(
+                    asyncio.to_thread(_sync_sdk_list, context, kubeconfig_path, resource, namespace),
+                    timeout=10.0,
+                )
+                if is_handled and items is not None:
+                    return {"items": items, "available": True}
+            except asyncio.TimeoutError:
+                pass
 
         # 2. Fallback: CLI execution
         args = ["get", resource]
@@ -68,6 +73,12 @@ async def cached_kubectl_list(
 
 def invalidate_cluster_cache(context: str) -> None:
     _cache.invalidate_prefix(f"{context}:")
-    for k in list(_api_client_pool.keys()):
-        if k.startswith(f"{context}:"):
-            _api_client_pool.pop(k, None)
+    with _pool_lock:
+        for k in list(_api_client_pool.keys()):
+            if k.startswith(f"{context}:") or f":{context}:" in k:
+                client = _api_client_pool.pop(k, None)
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass

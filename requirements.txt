@@ -13,4 +13,4 @@ httpx>=0.27.0
 # ai_agent.py -- "Diagnose with AI" in-app assistant (see ai_agent.py)
 google-adk>=1.0.0
 google-genai>=1.0.0
-anthropic>=0.40.0
+Deprecated>=1.2.14

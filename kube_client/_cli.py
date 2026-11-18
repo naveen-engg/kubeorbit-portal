@@ -81,19 +81,30 @@ async def run_cli(
 
     logger.debug("Running CLI command: %s", " ".join(exec_cmd))
     started = time.monotonic()
-    try:
-        returncode, stdout_b, stderr_b = await asyncio.to_thread(
-            _sync_subprocess_exec, exec_cmd, full_env, timeout
-        )
-    except Exception as exc:
-        if "Timeout" in type(exc).__name__:
-            logger.error("CLI command timed out after %ss: %s", timeout, " ".join(cmd))
-            raise CLIError(cmd, None, f"command timed out after {timeout}s") from None
-        raise
+    for attempt in range(2):
+        try:
+            returncode, stdout_b, stderr_b = await asyncio.to_thread(
+                _sync_subprocess_exec, exec_cmd, full_env, timeout
+            )
+        except Exception as exc:
+            if "Timeout" in type(exc).__name__:
+                logger.error("CLI command timed out after %ss: %s", timeout, " ".join(cmd))
+                raise CLIError(cmd, None, f"command timed out after {timeout}s") from None
+            raise
+
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        if returncode == 0:
+            break
+        if attempt == 0 and any(
+            err_tok in stderr
+            for err_tok in ("no route to host", "connection reset by peer", "TLS handshake timeout", "i/o timeout")
+        ):
+            await asyncio.sleep(0.35)
+            continue
+        break
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
-    stdout = stdout_b.decode("utf-8", errors="replace")
-    stderr = stderr_b.decode("utf-8", errors="replace")
 
     if returncode != 0:
         logger.warning(

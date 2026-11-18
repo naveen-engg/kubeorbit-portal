@@ -80,25 +80,47 @@ async def get_workloads_overview(
 
 
 async def get_network_topology(context: str, kubeconfig_path: Path, namespace: str) -> Dict[str, Any]:
-    """ILB -> Gateway -> HTTPRoute -> Service -> Pod, expressed as a generic
+    """ILB / Ingress -> Gateway -> HTTPRoute -> Service -> Pod, expressed as a generic
     node/edge graph the frontend renders identically for every provider."""
-    services, gateways, httproutes, pods = await asyncio.gather(
+    ttl = get_config_store().settings.kube_cache_ttl_seconds
+    ingresses, services, gateways, httproutes, pods, (raw_pods, _) = await asyncio.gather(
+        get_ingresses(context, kubeconfig_path, namespace),
         get_services(context, kubeconfig_path, namespace),
         get_gateways(context, kubeconfig_path, namespace),
         get_httproutes(context, kubeconfig_path, namespace),
         get_pods(context, kubeconfig_path, namespace),
+        cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl),
     )
 
     nodes: List[Dict[str, Any]] = []
     edges: List[Dict[str, str]] = []
+    pod_by_name = {p["name"]: p for p in pods}
+    raw_pod_labels = {
+        rp.get("metadata", {}).get("name", ""): (rp.get("metadata", {}).get("labels") or {})
+        for rp in (raw_pods or [])
+    }
 
     def add_node(node_id: str, label: str, kind: str, status: str = "unknown", meta: Optional[Dict] = None):
-        nodes.append({"id": node_id, "label": label, "kind": kind, "status": status, "meta": meta or {}})
+        if not any(n["id"] == node_id for n in nodes):
+            nodes.append({"id": node_id, "label": label, "kind": kind, "status": status, "meta": meta or {}})
 
     for svc in services:
         if svc["type"] == "LoadBalancer" and svc["external_ips"]:
             ilb_id = f"ilb::{svc['name']}"
             add_node(ilb_id, svc["external_ips"][0], "ilb", "healthy", {"service": svc["name"]})
+
+    for ing in ingresses.get("items", []):
+        ing_id = f"ingress::{ing['name']}"
+        add_node(ing_id, ing["name"], "ingress", "healthy" if ing.get("addresses") else "pending", ing)
+        for rule in ing.get("rules", []):
+            for p in rule.get("paths", []):
+                backend = p.get("backend_service")
+                if not backend:
+                    continue
+                svc_id = f"service::{backend}"
+                svc_match = next((s for s in services if s["name"] == backend), None)
+                add_node(svc_id, backend, "service", "healthy" if svc_match else "unknown", svc_match or {})
+                edges.append({"source": ing_id, "target": svc_id})
 
     for gw in gateways["items"]:
         gw_id = f"gateway::{gw['name']}"
@@ -117,28 +139,32 @@ async def get_network_topology(context: str, kubeconfig_path: Path, namespace: s
         for rule in route["rules"]:
             for backend in rule["backend_refs"]:
                 svc_id = f"service::{backend}"
-                if not any(n["id"] == svc_id for n in nodes):
-                    svc_match = next((s for s in services if s["name"] == backend), None)
-                    add_node(svc_id, backend, "service", "healthy" if svc_match else "unknown", svc_match or {})
+                svc_match = next((s for s in services if s["name"] == backend), None)
+                add_node(svc_id, backend, "service", "healthy" if svc_match else "unknown", svc_match or {})
                 edges.append({"source": route_id, "target": svc_id})
 
     for svc in services:
         svc_id = f"service::{svc['name']}"
-        if not any(n["id"] == svc_id for n in nodes):
-            add_node(svc_id, svc["name"], "service", "healthy", svc)
+        add_node(svc_id, svc["name"], "service", "healthy", svc)
         selector = svc.get("selector") or {}
         if not selector:
             continue
-        # Normalized pods don't carry labels; approximate the match via the
-        # common `app`/`app.kubernetes.io/name` selector against pod name
-        # prefix rather than issuing a second labeled-list call per service.
-        app_sel = selector.get("app") or selector.get("app.kubernetes.io/name")
-        if app_sel:
-            for pod in pods:
-                if pod["name"].startswith(app_sel):
-                    pod_id = f"pod::{pod['name']}"
-                    add_node(pod_id, pod["name"], "pod", "healthy" if pod["status"] == "Running" else "unhealthy", pod)
-                    edges.append({"source": svc_id, "target": pod_id})
+        matched_any = False
+        for pod_name, labels in raw_pod_labels.items():
+            if _matches_selector(labels, selector) and pod_name in pod_by_name:
+                pod = pod_by_name[pod_name]
+                pod_id = f"pod::{pod['name']}"
+                add_node(pod_id, pod["name"], "pod", "healthy" if pod["status"] == "Running" else "unhealthy", pod)
+                edges.append({"source": svc_id, "target": pod_id})
+                matched_any = True
+        if not matched_any:
+            app_sel = selector.get("app") or selector.get("app.kubernetes.io/name")
+            if app_sel:
+                for pod in pods:
+                    if pod["name"].startswith(app_sel):
+                        pod_id = f"pod::{pod['name']}"
+                        add_node(pod_id, pod["name"], "pod", "healthy" if pod["status"] == "Running" else "unhealthy", pod)
+                        edges.append({"source": svc_id, "target": pod_id})
 
     return {
         "namespace": namespace,

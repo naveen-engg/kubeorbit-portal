@@ -34,12 +34,16 @@ def _normalize_node(n: Dict[str, Any]) -> Dict[str, Any]:
     ] or ["worker"]
     info = status.get("nodeInfo", {})
     addresses = {a.get("type"): a.get("address") for a in status.get("addresses", []) or []}
+    taints = n.get("spec", {}).get("taints", []) or []
     return {
         "name": n.get("metadata", {}).get("name"),
         "status": "Ready" if conditions.get("Ready") == "True" else "NotReady",
         "roles": roles,
         "kubernetes_version": info.get("kubeletVersion"),
         "os_image": info.get("osImage"),
+        "container_runtime": info.get("containerRuntimeVersion"),
+        "kernel_version": info.get("kernelVersion"),
+        "architecture": info.get("architecture"),
         "zone": zone,
         "node_pool": node_pool,
         "instance_type": instance_type,
@@ -47,6 +51,14 @@ def _normalize_node(n: Dict[str, Any]) -> Dict[str, Any]:
         "external_ip": addresses.get("ExternalIP"),
         "cpu_capacity": status.get("capacity", {}).get("cpu"),
         "memory_capacity": status.get("capacity", {}).get("memory"),
+        "pods_capacity": status.get("capacity", {}).get("pods", "110"),
+        "conditions": {
+            "MemoryPressure": conditions.get("MemoryPressure") == "True",
+            "DiskPressure": conditions.get("DiskPressure") == "True",
+            "PIDPressure": conditions.get("PIDPressure") == "True",
+            "NetworkUnavailable": conditions.get("NetworkUnavailable") == "True",
+        },
+        "taints": [f"{t.get('key')}={t.get('value', '')}:{t.get('effect')}" for t in taints],
         "created_at": _age_iso(n),
     }
 
@@ -64,22 +76,114 @@ def _pod_phase_and_reason(p: Dict[str, Any]) -> Tuple[str, Optional[str], int]:
     return phase, reason, restarts
 
 
+def _parse_cpu_m(val_str: str) -> int:
+    if not val_str:
+        return 0
+    val_str = str(val_str).strip()
+    if val_str.endswith("m"):
+        try:
+            return int(float(val_str[:-1]))
+        except ValueError:
+            return 0
+    if val_str.endswith("n"):
+        try:
+            return max(1, int(float(val_str[:-1]) / 1_000_000.0))
+        except ValueError:
+            return 0
+    try:
+        return int(float(val_str) * 1000)
+    except ValueError:
+        return 0
+
+
+def _parse_mem_mi(val_str: str) -> int:
+    if not val_str:
+        return 0
+    val_str = str(val_str).strip()
+    units = {
+        "Ki": 1 / 1024.0,
+        "Mi": 1.0,
+        "Gi": 1024.0,
+        "Ti": 1024.0 * 1024.0,
+        "K": 1000.0 / (1024.0 * 1024.0),
+        "M": 1_000_000.0 / (1024.0 * 1024.0),
+        "G": 1_000_000_000.0 / (1024.0 * 1024.0),
+    }
+    for unit, mult in units.items():
+        if val_str.endswith(unit):
+            try:
+                return int(round(float(val_str[:-len(unit)]) * mult))
+            except ValueError:
+                return 0
+    try:
+        return int(round(float(val_str) / (1024.0 * 1024.0)))
+    except ValueError:
+        return 0
+
+
+def _format_cpu_short(m: int) -> str:
+    if m <= 0:
+        return "—"
+    if m >= 1000 and m % 100 == 0:
+        return f"{m / 1000:.2f}".rstrip("0").rstrip(".") if m % 1000 != 0 else f"{m / 1000:.2f}"
+    return f"{m}m"
+
+
+def _format_mem_short(mi: int) -> str:
+    if mi <= 0:
+        return "—"
+    if mi >= 1024 and mi % 512 == 0:
+        return f"{mi / 1024:.1f}Gi".replace(".0Gi", "Gi")
+    return f"{mi}Mi"
+
+
 def _normalize_pod(p: Dict[str, Any]) -> Dict[str, Any]:
     meta = p.get("metadata", {})
     spec = p.get("spec", {})
     status = p.get("status", {})
     phase, reason, restarts = _pod_phase_and_reason(p)
     containers = status.get("containerStatuses", []) or []
+    spec_containers = spec.get("containers", []) or []
     ready_count = sum(1 for c in containers if c.get("ready"))
+
+    req_cpu_m = 0
+    req_mem_mi = 0
+    lim_cpu_m = 0
+    lim_mem_mi = 0
+    for sc in spec_containers:
+        res = sc.get("resources", {}) or {}
+        reqs = res.get("requests", {}) or {}
+        lims = res.get("limits", {}) or {}
+        req_cpu_m += _parse_cpu_m(reqs.get("cpu", ""))
+        req_mem_mi += _parse_mem_mi(reqs.get("memory", ""))
+        lim_cpu_m += _parse_cpu_m(lims.get("cpu", ""))
+        lim_mem_mi += _parse_mem_mi(lims.get("memory", ""))
+
+    owners = meta.get("ownerReferences", []) or []
+    owner_ref = f"{owners[0].get('kind')}/{owners[0].get('name')}" if owners else None
+
     return {
         "name": meta.get("name"),
         "namespace": meta.get("namespace"),
         "status": phase,
         "reason": reason,
-        "ready": f"{ready_count}/{len(containers)}",
+        "ready": f"{ready_count}/{len(containers) or len(spec_containers)}",
         "restarts": restarts,
         "node": spec.get("nodeName"),
+        "pod_ip": status.get("podIP"),
+        "qos_class": status.get("qosClass", "BestEffort"),
+        "owner": owner_ref,
         "created_at": _age_iso(p),
+        "resources": {
+            "req_cpu_m": req_cpu_m,
+            "req_mem_mi": req_mem_mi,
+            "lim_cpu_m": lim_cpu_m,
+            "lim_mem_mi": lim_mem_mi,
+            "req_cpu_str": _format_cpu_short(req_cpu_m),
+            "req_mem_str": _format_mem_short(req_mem_mi),
+            "lim_cpu_str": _format_cpu_short(lim_cpu_m),
+            "lim_mem_str": _format_mem_short(lim_mem_mi),
+        },
         "containers": [
             {
                 "name": c.get("name"),

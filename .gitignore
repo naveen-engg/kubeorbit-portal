@@ -4,7 +4,27 @@ __pycache__/
 venv/
 .env
 config/clusters.yaml
+clusters.yaml/
+1794463005157.gif
 .kubeorbit/
 *.log
 .DS_Store
 .claude/
+artifacts/
+.pytest_cache/
+
+# Terraform state, provider binaries, and local variable files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc

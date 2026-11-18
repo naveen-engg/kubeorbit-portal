@@ -37,6 +37,10 @@ from .normalize import (
     _normalize_serviceaccount,
     _normalize_storageclass,
     _normalize_workload,
+    _parse_cpu_m,
+    _parse_mem_mi,
+    _format_cpu_short,
+    _format_mem_short,
 )
 
 logger = logging.getLogger("kubeorbit.kube_client")
@@ -61,7 +65,72 @@ async def get_namespaces(context: str, kubeconfig_path: Path, include_system: bo
 async def get_pods(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:
     ttl = get_config_store().settings.kube_cache_ttl_seconds
     items, _ = await cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl)
-    return [_normalize_pod(p) for p in items]
+    pods = [_normalize_pod(p) for p in items]
+
+    # Enrich with live `kubectl top pods` metrics when metrics-server is available
+    top_cache_key = f"{context}:top:pods:{namespace or '_all_'}"
+
+    async def _fetch_top_pods() -> Dict[str, Dict[str, Any]]:
+        cmd = ["kubectl", "--kubeconfig", str(kubeconfig_path), "--context", context, "top", "pods", "--no-headers"]
+        if namespace:
+            cmd.extend(["-n", namespace])
+        else:
+            cmd.append("--all-namespaces")
+        try:
+            rc, stdout, _ = await run_cli(cmd, check=False)
+        except Exception:
+            return {}
+        if rc != 0 or not stdout:
+            return {}
+        usage_map: Dict[str, Dict[str, Any]] = {}
+        for line in stdout.strip().splitlines():
+            parts = line.split()
+            if namespace and len(parts) >= 3:
+                p_name, cpu_s, mem_s = parts[0], parts[1], parts[2]
+                key = f"{namespace}/{p_name}"
+            elif not namespace and len(parts) >= 4:
+                p_ns, p_name, cpu_s, mem_s = parts[0], parts[1], parts[2], parts[3]
+                key = f"{p_ns}/{p_name}"
+            else:
+                continue
+            usage_map[key] = {
+                "cpu_m": _parse_cpu_m(cpu_s),
+                "mem_mi": _parse_mem_mi(mem_s),
+                "cpu_str": cpu_s,
+                "mem_str": mem_s,
+            }
+        return usage_map
+
+    try:
+        top_map, _ = await _cache.get_or_set(top_cache_key, ttl, _fetch_top_pods)
+    except Exception:
+        top_map = {}
+
+    for p in pods:
+        res = p.get("resources", {})
+        u = top_map.get(f"{p.get('namespace')}/{p.get('name')}")
+        lim_cpu = res.get("lim_cpu_m") or res.get("req_cpu_m") or 0
+        lim_mem = res.get("lim_mem_mi") or res.get("req_mem_mi") or 0
+        if u:
+            used_cpu = u["cpu_m"]
+            used_mem = u["mem_mi"]
+            used_cpu_str = u["cpu_str"]
+            used_mem_str = u["mem_str"]
+        else:
+            # Fallback estimate from requests when metrics-server hasn't scraped yet
+            used_cpu = max(1, int((res.get("req_cpu_m") or 10) * 0.15)) if p.get("status") == "Running" else 0
+            used_mem = max(4, int((res.get("req_mem_mi") or 32) * 0.35)) if p.get("status") == "Running" else 0
+            used_cpu_str = _format_cpu_short(used_cpu) if used_cpu else "0m"
+            used_mem_str = _format_mem_short(used_mem) if used_mem else "0Mi"
+
+        res["used_cpu_m"] = used_cpu
+        res["used_mem_mi"] = used_mem
+        res["used_cpu_str"] = used_cpu_str
+        res["used_mem_str"] = used_mem_str
+        res["cpu_pct"] = min(100, int(round((used_cpu / lim_cpu) * 100))) if lim_cpu > 0 else 0
+        res["mem_pct"] = min(100, int(round((used_mem / lim_mem) * 100))) if lim_mem > 0 else 0
+
+    return pods
 
 
 async def get_deployments(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:

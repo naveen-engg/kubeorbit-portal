@@ -36,10 +36,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-
 import auth
 import kube_client
-from auth import CurrentUser, get_current_user
+from auth import CurrentUser, get_current_user, require_role
 from config import ConfigError, get_config_store, get_runtime_env
 from providers import ProviderError, available_providers, build_provider
 from providers.base import ClusterMeta
@@ -52,6 +51,8 @@ logger = logging.getLogger("kubeorbit.app")
 
 APP_VERSION = "1.0.0"
 K8S_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$"
+K8S_CLUSTER_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
+K8S_KIND_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,127}$"
 
 app = FastAPI(title="KubeOrbit", version=APP_VERSION)
 
@@ -59,7 +60,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_runtime_env().cors_allow_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -162,9 +163,11 @@ def _get_cluster_or_404(cluster_id: str):
 
 
 async def get_cluster_context(
-    cluster_id: str, user: CurrentUser = Depends(get_current_user)
+    cluster_id: str = ApiPath(..., pattern=K8S_CLUSTER_ID_PATTERN, max_length=63),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ClusterContext:
     cluster = _get_cluster_or_404(cluster_id)
+    require_role(user, "viewer", team_id=cluster.team_id)
     provider = build_provider(cluster)
     auth_result = await auth.ensure_cluster_authenticated(cluster, provider, user)
     return ClusterContext(cluster=cluster, provider=provider, auth_result=auth_result)
@@ -214,15 +217,22 @@ async def ready() -> JSONResponse:
 
 @app.get("/api/status")
 async def status(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    import ai_agent
+
     store = get_config_store()
     env = get_runtime_env()
-    binaries = {b: shutil.which(b) is not None for b in ("kubectl", "helm", "gcloud", "aws", "az")}
+    binaries = {b: shutil.which(b) is not None for b in ("kubectl", "helm", "gcloud", "aws", "az", "kubelogin")}
+    providers_list = available_providers()
+    if env.disable_local_provider:
+        providers_list = [p for p in providers_list if p != "local"]
     return {
         "version": APP_VERSION,
         "auth_mode": env.auth_mode,
-        "user": {"subject": user.subject, "method": user.method},
-        "providers": available_providers(),
+        "user": {"subject": user.subject, "method": user.method, "role": user.role},
+        "disable_local_provider": env.disable_local_provider,
+        "providers": providers_list,
         "cli_binaries": binaries,
+        "ai": ai_agent.ensure_vertex_ai_env(),
         "team_count": len(store.teams),
         "cluster_count": store.cluster_count,
         "excluded_namespace_patterns": store.settings.excluded_namespace_patterns,
@@ -241,18 +251,36 @@ async def teams(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]
 # --------------------------------------------------------------------------- #
 
 class OnboardClusterRequest(BaseModel):
-    id: str = Field(..., description="Unique URL-safe cluster ID")
-    name: str = Field(..., description="Human readable cluster name")
+    id: str = Field(..., pattern=K8S_CLUSTER_ID_PATTERN, description="Unique URL-safe cluster ID")
+    name: str = Field(..., min_length=1, max_length=128, description="Human readable cluster name")
     provider: str = Field(..., description="gke | eks | aks")
     environment: str = Field(..., description="sandbox | nonprod | prod")
-    team_id: str = Field("platform", description="Team identifier")
-    team_name: str = Field("Platform Engineering", description="Team name")
-    description: Optional[str] = None
+    team_id: str = Field("platform", pattern=K8S_CLUSTER_ID_PATTERN, description="Team identifier")
+    team_name: str = Field("Platform Engineering", max_length=128, description="Team name")
+    description: Optional[str] = Field(None, max_length=512)
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ParseKubeconfigRequest(BaseModel):
     kubeconfig_path: str = Field("~/.kube/config", description="Path to local kubeconfig file")
+
+
+def _enforce_provider_policy(provider_name: str) -> None:
+    if provider_name.strip().lower() == "local" and get_runtime_env().disable_local_provider:
+        raise HTTPException(
+            status_code=403,
+            detail="The 'local' kubeconfig provider is disabled in Cloud Run / IAP enterprise mode.",
+        )
+
+
+def _invalidate_cluster_caches(cluster_id: str) -> None:
+    auth.invalidate_cluster_auth(cluster_id)
+    try:
+        from kube_client._cache import _cache
+        _cache.invalidate_prefix(f"provider-meta:{cluster_id}")
+        _cache.invalidate_prefix(f"cost-estimate:{cluster_id}")
+    except Exception:
+        pass
 
 
 @app.get("/api/admin/clusters")
@@ -271,6 +299,7 @@ async def list_clusters(user: CurrentUser = Depends(get_current_user)) -> Dict[s
                     "team_id": team.id,
                     "team_name": team.name,
                     "description": getattr(cluster, "description", "") or "",
+                    "config": dict(cluster.config or {}),
                 })
     return {"clusters": clusters}
 
@@ -279,6 +308,8 @@ async def list_clusters(user: CurrentUser = Depends(get_current_user)) -> Dict[s
 async def test_cluster_connection(
     req: OnboardClusterRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
+    require_role(user, "admin", team_id=req.team_id)
+    _enforce_provider_policy(req.provider)
     from config import ClusterConfig
     cluster_cfg = ClusterConfig(
         id=req.id,
@@ -306,6 +337,8 @@ async def test_cluster_connection(
 async def onboard_cluster(
     req: OnboardClusterRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
+    require_role(user, "admin", team_id=req.team_id)
+    _enforce_provider_policy(req.provider)
     from config import add_cluster_to_config
     cluster_data = {
         "id": req.id,
@@ -321,16 +354,77 @@ async def onboard_cluster(
         environment=req.environment,
         cluster_data=cluster_data,
     )
+    _invalidate_cluster_caches(req.id)
+    kube_client.record_audit_event(
+        user=user.subject,
+        action="ONBOARD_CLUSTER",
+        cluster_id=req.id,
+        namespace="cluster-wide",
+        resource=f"cluster/{req.id}",
+        details=f"Onboarded {req.provider.upper()} cluster '{req.name}' in {req.environment}",
+    )
     logger.info("Onboarded cluster '%s' for team '%s' (user=%s)", req.id, req.team_id, user.subject)
+    return {"status": "ok", "teams": store.teams_payload()}
+
+
+@app.put("/api/admin/clusters/{cluster_id}")
+async def update_cluster(
+    req: OnboardClusterRequest,
+    cluster_id: str = ApiPath(..., pattern=K8S_CLUSTER_ID_PATTERN, max_length=63),
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    require_role(user, "admin", team_id=req.team_id)
+    _enforce_provider_policy(req.provider)
+    from config import add_cluster_to_config
+    cluster_data = {
+        "id": cluster_id,
+        "name": req.name,
+        "provider": req.provider,
+        "environment": req.environment,
+        "description": req.description or f"{req.provider.upper()} cluster {req.name}",
+        "config": req.config,
+    }
+    store = add_cluster_to_config(
+        team_id=req.team_id,
+        team_name=req.team_name,
+        environment=req.environment,
+        cluster_data=cluster_data,
+    )
+    _invalidate_cluster_caches(cluster_id)
+    kube_client.record_audit_event(
+        user=user.subject,
+        action="UPDATE_CLUSTER",
+        cluster_id=cluster_id,
+        namespace="cluster-wide",
+        resource=f"cluster/{cluster_id}",
+        details=f"Updated {req.provider.upper()} cluster '{req.name}' in {req.environment}",
+    )
+    logger.info("Updated cluster '%s' ('%s') for team '%s' (user=%s)", cluster_id, req.name, req.team_id, user.subject)
     return {"status": "ok", "teams": store.teams_payload()}
 
 
 @app.delete("/api/admin/clusters/{cluster_id}")
 async def delete_cluster(
-    cluster_id: str, user: CurrentUser = Depends(get_current_user)
+    cluster_id: str = ApiPath(..., pattern=K8S_CLUSTER_ID_PATTERN, max_length=63),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    existing_team_id = None
+    try:
+        existing_team_id = get_config_store().get_cluster(cluster_id).team_id
+    except Exception:
+        pass
+    require_role(user, "admin", team_id=existing_team_id)
     from config import delete_cluster_from_config
     store = delete_cluster_from_config(cluster_id)
+    _invalidate_cluster_caches(cluster_id)
+    kube_client.record_audit_event(
+        user=user.subject,
+        action="DELETE_CLUSTER",
+        cluster_id=cluster_id,
+        namespace="cluster-wide",
+        resource=f"cluster/{cluster_id}",
+        details=f"Deleted cluster '{cluster_id}'",
+    )
     logger.info("Deleted cluster '%s' (user=%s)", cluster_id, user.subject)
     return {"status": "ok", "teams": store.teams_payload()}
 
@@ -339,12 +433,19 @@ async def delete_cluster(
 async def parse_kubeconfig(
     req: ParseKubeconfigRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
+    require_role(user, "admin")
+    if get_runtime_env().disable_local_provider:
+        raise HTTPException(
+            status_code=403,
+            detail="Parsing local server kubeconfig files is disabled in Cloud Run / IAP enterprise mode.",
+        )
+
     raw_path = req.kubeconfig_path.strip()
     if not raw_path:
         raw_path = "~/.kube/config"
     expanded_path = os.path.expanduser(raw_path)
     path_obj = Path(expanded_path)
-    
+
     if not path_obj.exists():
         raise HTTPException(status_code=404, detail=f"Kubeconfig file not found at: {raw_path}")
 
@@ -352,7 +453,7 @@ async def parse_kubeconfig(
         import yaml
         with open(path_obj, "r", encoding="utf-8") as f:
             content = yaml.safe_load(f) or {}
-        
+
         current_ctx = content.get("current-context", "")
         contexts = []
         for ctx in content.get("contexts", []):
@@ -373,7 +474,6 @@ async def parse_kubeconfig(
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to parse kubeconfig: {str(exc)}")
-
 
 
 # --------------------------------------------------------------------------- #
@@ -510,11 +610,20 @@ async def reveal_secret(
 ) -> JSONResponse:
     """Explicit, audited, uncached decode of one secret's values. Never
     invoked implicitly by any list/overview endpoint."""
+    require_role(user, "operator", team_id=ctx.cluster.team_id)
     logger.warning(
         "SECRET REVEAL: user=%s cluster=%s namespace=%s secret=%s",
         user.subject, ctx.cluster.id, namespace, name,
     )
     result = await kube_client.reveal_secret(ctx.context, ctx.kubeconfig, namespace, name)
+    kube_client.record_audit_event(
+        user=user.subject,
+        action="REVEAL_SECRET",
+        cluster_id=ctx.cluster.id,
+        namespace=namespace,
+        resource=f"secret/{name}",
+        details=f"Revealed secret '{name}' in namespace '{namespace}'",
+    )
     response = JSONResponse(content=_json(result))
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -559,7 +668,6 @@ async def cluster_workload_map(
     return {"cluster_id": ctx.cluster.id, **data}
 
 
-
 # --------------------------------------------------------------------------- #
 # Events / helm
 # --------------------------------------------------------------------------- #
@@ -582,13 +690,12 @@ async def cluster_helm(ctx: ClusterContext = Depends(get_cluster_context)) -> Di
 
 @app.get("/api/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs")
 async def pod_logs(
-    namespace: str,
-    pod_name: str,
-    container: Optional[str] = Query(None),
+    namespace: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    pod_name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    container: Optional[str] = Query(None, pattern=K8S_NAME_PATTERN, max_length=63),
     tail_lines: int = Query(200, ge=10, le=5000),
     ctx: ClusterContext = Depends(get_cluster_context),
 ) -> Dict[str, Any]:
-
     logs = await kube_client.get_pod_logs(
         ctx.context, ctx.kubeconfig, namespace, pod_name, container=container, tail_lines=tail_lines
     )
@@ -604,8 +711,8 @@ async def pod_logs(
 
 @app.get("/api/clusters/{cluster_id}/manifest")
 async def resource_yaml(
-    kind: str = Query(...),
-    name: str = Query(...),
+    kind: str = Query(..., pattern=K8S_KIND_PATTERN, max_length=128),
+    name: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=253),
     namespace: Optional[str] = OptionalNamespaceQuery,
     ctx: ClusterContext = Depends(get_cluster_context),
 ) -> Dict[str, Any]:
@@ -627,8 +734,79 @@ async def resource_yaml(
 
 @app.get("/api/fleet/overview")
 async def fleet_overview(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
-    """Unified multi-cluster fleet dashboard aggregating all registered clusters."""
+    """Unified multi-cluster fleet dashboard aggregating all registered clusters concurrently."""
     store = get_config_store()
+    all_clusters = [
+        cluster_cfg
+        for team in store.teams
+        for env_group in team.environments
+        for cluster_cfg in env_group.clusters
+    ]
+
+    async def _probe_cluster(cluster_cfg) -> Dict[str, Any]:
+        try:
+            provider = build_provider(cluster_cfg)
+            auth_res = await auth.ensure_cluster_authenticated(cluster_cfg, provider, user)
+            kcfg_path = Path(auth_res.kubeconfig_path)
+            nodes, namespaces, pods = await asyncio.gather(
+                kube_client.get_nodes(auth_res.context_name, kcfg_path),
+                kube_client.get_namespaces(auth_res.context_name, kcfg_path, include_system=True),
+                kube_client.get_pods(auth_res.context_name, kcfg_path, ""),
+            )
+            c_nodes = len(nodes)
+            c_pods = len(pods)
+            c_ns = len(namespaces)
+
+            c_cpu = 0.0
+            c_mem = 0.0
+            for n in nodes:
+                c_cpu += float(n.get("cpu_capacity", 0) or 0)
+                mem_str = str(n.get("memory_capacity", "0")).lower().replace("ki", "")
+                try:
+                    c_mem += float(mem_str) / (1024 * 1024)
+                except ValueError:
+                    pass
+
+            healthy_pod_count = sum(1 for p in pods if p.get("status") in ("Running", "Succeeded"))
+            c_health_score = round((healthy_pod_count / c_pods) * 100) if c_pods else 100
+
+            return {
+                "id": cluster_cfg.id,
+                "name": cluster_cfg.name,
+                "provider": cluster_cfg.provider,
+                "environment": cluster_cfg.environment,
+                "status": "ONLINE",
+                "node_count": c_nodes,
+                "pod_count": c_pods,
+                "namespace_count": c_ns,
+                "cpu_cores": round(c_cpu, 1),
+                "memory_gib": round(c_mem, 1),
+                "health_score": c_health_score,
+                "health_status": "Healthy" if c_health_score >= 80 else "Degraded",
+                "_raw_cpu": c_cpu,
+                "_raw_mem": c_mem,
+            }
+        except Exception as exc:
+            return {
+                "id": cluster_cfg.id,
+                "name": cluster_cfg.name,
+                "provider": cluster_cfg.provider,
+                "environment": cluster_cfg.environment,
+                "status": "DEGRADED",
+                "error": str(exc),
+                "node_count": 0,
+                "pod_count": 0,
+                "namespace_count": 0,
+                "cpu_cores": 0,
+                "memory_gib": 0,
+                "health_score": 0,
+                "health_status": "Unreachable",
+                "_raw_cpu": 0.0,
+                "_raw_mem": 0.0,
+            }
+
+    probed = await asyncio.gather(*(_probe_cluster(c) for c in all_clusters))
+
     clusters_info = []
     total_nodes = 0
     total_pods = 0
@@ -637,77 +815,17 @@ async def fleet_overview(user: CurrentUser = Depends(get_current_user)) -> Dict[
     total_mem_gib = 0.0
     online_count = 0
 
-    for team in store.teams:
-        for env_group in team.environments:
-            for cluster_cfg in env_group.clusters:
-                try:
-                    provider = build_provider(cluster_cfg)
-                    auth_res = await auth.ensure_cluster_authenticated(cluster_cfg, provider, user)
-                    nodes = await kube_client.get_nodes(auth_res.context_name, Path(auth_res.kubeconfig_path))
-                    namespaces = await kube_client.get_namespaces(auth_res.context_name, Path(auth_res.kubeconfig_path), include_system=True)
-                    pods = await kube_client.get_pods(auth_res.context_name, Path(auth_res.kubeconfig_path), "")
-
-                    c_nodes = len(nodes)
-                    c_pods = len(pods)
-                    c_ns = len(namespaces)
-                    online_count += 1
-
-                    # Sum CPU & memory from nodes
-                    c_cpu = 0.0
-                    c_mem = 0.0
-                    for n in nodes:
-                        c_cpu += float(n.get("cpu_capacity", 0) or 0)
-                        # mem in Ki
-                        mem_str = str(n.get("memory_capacity", "0")).lower().replace("ki", "")
-                        try:
-                            c_mem += float(mem_str) / (1024 * 1024)
-                        except ValueError:
-                            pass
-
-                    total_nodes += c_nodes
-                    total_pods += c_pods
-                    total_namespaces += c_ns
-                    total_cpu_cores += c_cpu
-                    total_mem_gib += c_mem
-
-                    # Per-cluster health: % of pods actually healthy (same
-                    # Running/Succeeded definition as get_workloads_overview),
-                    # not just "did we manage to connect" -- that's already
-                    # covered separately by `status` below. A cluster with no
-                    # pods at all reads as 100% (nothing to be unhealthy).
-                    healthy_pod_count = sum(1 for p in pods if p.get("status") in ("Running", "Succeeded"))
-                    c_health_score = round((healthy_pod_count / c_pods) * 100) if c_pods else 100
-
-                    clusters_info.append({
-                        "id": cluster_cfg.id,
-                        "name": cluster_cfg.name,
-                        "provider": cluster_cfg.provider,
-                        "environment": cluster_cfg.environment,
-                        "status": "ONLINE",
-                        "node_count": c_nodes,
-                        "pod_count": c_pods,
-                        "namespace_count": c_ns,
-                        "cpu_cores": round(c_cpu, 1),
-                        "memory_gib": round(c_mem, 1),
-                        "health_score": c_health_score,
-                        "health_status": "Healthy" if c_health_score >= 80 else "Degraded",
-                    })
-                except Exception as exc:
-                    clusters_info.append({
-                        "id": cluster_cfg.id,
-                        "name": cluster_cfg.name,
-                        "provider": cluster_cfg.provider,
-                        "environment": cluster_cfg.environment,
-                        "status": "DEGRADED",
-                        "error": str(exc),
-                        "node_count": 0,
-                        "pod_count": 0,
-                        "namespace_count": 0,
-                        "cpu_cores": 0,
-                        "memory_gib": 0,
-                        "health_score": 0,
-                        "health_status": "Unreachable",
-                    })
+    for item in probed:
+        raw_cpu = item.pop("_raw_cpu", 0.0)
+        raw_mem = item.pop("_raw_mem", 0.0)
+        if item["status"] == "ONLINE":
+            online_count += 1
+            total_nodes += item["node_count"]
+            total_pods += item["pod_count"]
+            total_namespaces += item["namespace_count"]
+            total_cpu_cores += raw_cpu
+            total_mem_gib += raw_mem
+        clusters_info.append(item)
 
     fleet_health_score = int((online_count / max(1, len(clusters_info))) * 100)
     healthy_cluster_count = sum(1 for c in clusters_info if c.get("health_score", 0) >= 80)
@@ -741,8 +859,8 @@ async def workloads_catalog(
 
 @app.get("/api/clusters/{cluster_id}/workloads/{workload_type}/{name}/rollout/history")
 async def workload_rollout_history(
-    workload_type: str,
-    name: str,
+    workload_type: str = ApiPath(..., pattern=K8S_KIND_PATTERN, max_length=63),
+    name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
     namespace: str = RequiredNamespaceQuery,
     ctx: ClusterContext = Depends(get_cluster_context),
 ) -> Dict[str, Any]:
@@ -757,14 +875,15 @@ class RollbackRequest(BaseModel):
 
 @app.post("/api/clusters/{cluster_id}/workloads/{workload_type}/{name}/rollback")
 async def workload_rollback(
-    workload_type: str,
-    name: str,
     req: RollbackRequest,
+    workload_type: str = ApiPath(..., pattern=K8S_KIND_PATTERN, max_length=63),
+    name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
     namespace: str = RequiredNamespaceQuery,
     ctx: ClusterContext = Depends(get_cluster_context),
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Execute rollback for a workload and record an audit log."""
+    require_role(user, "operator", team_id=ctx.cluster.team_id)
     res = await kube_client.rollout_undo(
         ctx.context, ctx.kubeconfig, namespace, workload_type, name, to_revision=req.to_revision
     )
@@ -860,13 +979,16 @@ async def ai_diagnose(
     cluster; degrades to a clear error if no model credentials are
     configured rather than failing the whole request."""
     import ai_agent
+    from mcp_server.client import configure_inprocess_app
 
+    configure_inprocess_app(app)
     result = await ai_agent.diagnose(
         cluster_id=ctx.cluster.id,
         namespace=req.namespace,
         resource_type=req.resource_type,
         resource_name=req.resource_name,
         question=req.question,
+        user_id=user.subject,
     )
     logger.info(
         "AI diagnose: user=%s cluster=%s namespace=%s resource=%s/%s ok=%s",
@@ -893,8 +1015,15 @@ async def ai_chat(
     like every other cluster route -- the request body cannot point the
     conversation at a different cluster."""
     import ai_agent
+    from mcp_server.client import configure_inprocess_app
 
-    result = await ai_agent.chat(cluster_id=ctx.cluster.id, message=req.message, session_id=req.session_id)
+    configure_inprocess_app(app)
+    result = await ai_agent.chat(
+        cluster_id=ctx.cluster.id,
+        message=req.message,
+        session_id=req.session_id,
+        user_id=user.subject,
+    )
     logger.info(
         "AI chat: user=%s cluster=%s session=%s ok=%s",
         user.subject, ctx.cluster.id, req.session_id, "error" not in result,
@@ -916,7 +1045,9 @@ class NoCacheStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
         return response
 
 

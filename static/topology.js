@@ -42,7 +42,7 @@ const COL_LABEL_H = 34;
 const LANE_PAD_X = 16;
 const LANE_PAD_TOP = 12;
 
-export const NETWORK_COLUMNS = ["ilb", "gateway", "httproute", "service", "pod"];
+export const NETWORK_COLUMNS = ["ilb", "ingress", "gateway", "httproute", "service", "pod"];
 export const STORAGE_COLUMNS = ["storageclass", "pv", "pvc", "pod"];
 // Namespace map: routing in on the left, the workload that owns each pod,
 // the pod itself, then everything that pod actually mounts/references

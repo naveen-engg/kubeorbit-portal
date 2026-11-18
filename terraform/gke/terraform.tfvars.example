@@ -1,0 +1,9 @@
+project_id          = "adk-enterprise-observability"
+region              = "us-central1"
+location            = "us-central1-a"
+cluster_name        = "kubeorbit-gke"
+environment         = "sandbox"
+cloudrun_sa_email   = "kubeorbit-runner@adk-enterprise-observability.iam.gserviceaccount.com"
+machine_type        = "e2-standard-2"
+node_count          = 1
+disk_size_gb        = 30

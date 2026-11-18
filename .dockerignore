@@ -8,3 +8,10 @@ __pycache__
 venv
 *.md
 .claude
+artifacts
+terraform
+tests
+.pytest_cache
+.coverage
+scratch
+*.tmp

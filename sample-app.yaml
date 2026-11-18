@@ -63,10 +63,10 @@ spec:
         - containerPort: 80
         resources:
           requests:
-            cpu: "50m"
-            memory: "64Mi"
+            cpu: "10m"
+            memory: "32Mi"
           limits:
-            cpu: "200m"
+            cpu: "100m"
             memory: "128Mi"
         livenessProbe:
           httpGet:
@@ -137,10 +137,10 @@ spec:
             name: api-secrets
         resources:
           requests:
-            cpu: "100m"
-            memory: "128Mi"
+            cpu: "10m"
+            memory: "32Mi"
           limits:
-            cpu: "300m"
+            cpu: "150m"
             memory: "256Mi"
         livenessProbe:
           tcpSocket:
@@ -201,8 +201,8 @@ spec:
         - containerPort: 6379
         resources:
           requests:
-            cpu: "50m"
-            memory: "64Mi"
+            cpu: "10m"
+            memory: "32Mi"
           limits:
             cpu: "150m"
             memory: "128Mi"
@@ -253,6 +253,8 @@ spec:
       - name: postgres
         image: postgres:16-alpine
         env:
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
         - name: POSTGRES_DB
           value: "payments"
         - name: POSTGRES_USER
@@ -270,10 +272,10 @@ spec:
           mountPath: /var/lib/postgresql/data
         resources:
           requests:
-            cpu: "100m"
-            memory: "128Mi"
+            cpu: "20m"
+            memory: "64Mi"
           limits:
-            cpu: "500m"
+            cpu: "250m"
             memory: "512Mi"
   volumeClaimTemplates:
   - metadata:
@@ -415,3 +417,280 @@ spec:
           limits:
             cpu: "50m"
             memory: "64Mi"
+
+---
+# 9. Broken Canary Deployment (ImagePullBackOff scenario for AI Diagnostics & Events)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-canary
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: checkout-canary
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: checkout-canary
+    tier: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checkout-canary
+  template:
+    metadata:
+      labels:
+        app: checkout-canary
+        tier: backend
+        app.kubernetes.io/name: checkout-canary
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: checkout-service
+        image: nginx:nonexistent-canary-v99.9.9
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+---
+# 10. Ingress (Populates Network Topology & Resource Map Ingress -> Service -> Pod chain)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubeorbit-gateway
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: kubeorbit-gateway
+    app.kubernetes.io/part-of: kubeorbit-demo
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+spec:
+  rules:
+  - host: demo.kubeorbit.internal
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-frontend-svc
+            port:
+              number: 80
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: api-backend-svc
+            port:
+              number: 8080
+---
+# 11. NetworkPolicy (Zero-Trust Pod-to-Pod policy for Network view)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-backend-netpol
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# 12. HorizontalPodAutoscaler (Autoscaling scenario for api-backend)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-backend-hpa
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-backend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+# 13. Unmounted Archive PVC (Storage & Cost Optimization idle PVC scenario)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: legacy-audit-archive-pvc
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# 14. Step 9 Scenario: kube-scheduler Filter Failure (Pending due to unmatched nodeSelector)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-ml-inference
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: gpu-ml-inference
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: gpu-ml-inference
+    tier: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpu-ml-inference
+  template:
+    metadata:
+      labels:
+        app: gpu-ml-inference
+        tier: ai
+        app.kubernetes.io/name: gpu-ml-inference
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      nodeSelector:
+        accelerator: nvidia-h100-gpu
+      containers:
+      - name: inference-server
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"
+---
+# 15. Step 10a Scenario: kubelet CSI Mount Failure (Scheduled to node, stuck in ContainerCreating)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-shipper-csi
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: audit-shipper-csi
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: audit-shipper-csi
+    tier: security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-shipper-csi
+  template:
+    metadata:
+      labels:
+        app: audit-shipper-csi
+        tier: security
+        app.kubernetes.io/name: audit-shipper-csi
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: shipper
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+        volumeMounts:
+        - name: mtls-certs
+          mountPath: /etc/certs
+          readOnly: true
+        resources:
+          requests:
+            cpu: "5m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"
+      volumes:
+      - name: mtls-certs
+        secret:
+          secretName: missing-mtls-client-cert
+---
+# 16. Step 11 Scenario: kubelet Readiness Probe Failure (Container Running, but 0/1 Ready)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-unready
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: inventory-unready
+    app.kubernetes.io/part-of: kubeorbit-demo
+    app: inventory-unready
+    tier: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inventory-unready
+  template:
+    metadata:
+      labels:
+        app: inventory-unready
+        tier: backend
+        app.kubernetes.io/name: inventory-unready
+        app.kubernetes.io/part-of: kubeorbit-demo
+    spec:
+      containers:
+      - name: inventory-api
+        image: hashicorp/http-echo:0.2.3
+        args:
+        - "-text=Inventory Service Listening on 8080"
+        - "-listen=:8080"
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 9099
+          initialDelaySeconds: 2
+          periodSeconds: 5
+          failureThreshold: 1
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "64Mi"
+---
+# 17. Step 12 Scenario: EndpointSlice 503 Blackhole (Service selector matches 0 pods)
+apiVersion: v1
+kind: Service
+metadata:
+  name: orphaned-orders-svc
+  namespace: kubeorbit-demo
+  labels:
+    app.kubernetes.io/name: orphaned-orders-svc
+    app.kubernetes.io/part-of: kubeorbit-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: orders-service-typo-v99
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http

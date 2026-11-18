@@ -1,8 +1,12 @@
-"""In-memory audit trail for privileged user actions (secret reveal, rollback, ...)."""
+"""In-memory + Cloud Logging structured audit trail for privileged user actions
+(secret reveal, rollback, cluster onboarding/updates/deletion)."""
 from __future__ import annotations
 
 import datetime
+import itertools
+import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +14,7 @@ logger = logging.getLogger("kubeorbit.kube_client")
 
 _AUDIT_LOGS: List[Dict[str, Any]] = []
 _MAX_AUDIT_LOGS = 500
+_AUDIT_SEQ = itertools.count(1)
 
 
 def record_audit_event(
@@ -21,9 +26,11 @@ def record_audit_event(
     details: str = "",
     status: str = "SUCCESS",
 ) -> Dict[str, Any]:
-    """Record a privileged user action to the in-memory audit trail."""
+    """Record a privileged user action to the in-memory audit trail and emit a
+    structured JSON log line indexed automatically by GCP Cloud Logging."""
+    seq = next(_AUDIT_SEQ)
     entry = {
-        "id": f"audit-{int(time.time()*1000)}",
+        "id": f"audit-{int(time.time() * 1000)}-{seq}",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "user": user or "anonymous",
         "action": action,
@@ -36,7 +43,23 @@ def record_audit_event(
     _AUDIT_LOGS.insert(0, entry)
     if len(_AUDIT_LOGS) > _MAX_AUDIT_LOGS:
         _AUDIT_LOGS.pop()
-    logger.info("AUDIT: [%s] %s by %s on %s/%s (%s)", status, action, user, cluster_id, resource, details)
+
+    # Emit structured JSON log line for Cloud Run / GCP Cloud Logging when running in cloud/IAP mode
+    if os.environ.get("K_SERVICE") or os.environ.get("KUBEORBIT_AUTH_MODE", "").lower() == "iap":
+        cloud_log = {
+            "severity": "NOTICE" if status == "SUCCESS" else "WARNING",
+            "message": f"AUDIT [{status}] {action} by {entry['user']} on {cluster_id}/{resource}",
+            "logging.googleapis.com/labels": {
+                "log_type": "kubeorbit_audit",
+                "action": action,
+                "cluster_id": cluster_id,
+                "user": entry["user"],
+            },
+            "audit": entry,
+        }
+        print(json.dumps(cloud_log), flush=True)
+    else:
+        logger.info("AUDIT: [%s] %s by %s on %s/%s (%s)", status, action, user, cluster_id, resource, details)
     return entry
 
 

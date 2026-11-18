@@ -116,12 +116,17 @@ class GKEProvider(BaseKubeProvider):
         loc_flag, loc_val = self._location()
         project = self._project()
         cluster_name = self._cluster_name()
+        impersonate = self._impersonation_target()
+
+        cmd = [
+            "gcloud", "container", "clusters", "describe", cluster_name,
+            "--project", project, loc_flag, loc_val, "--format=json",
+        ]
+        if impersonate:
+            cmd += ["--impersonate-service-account", impersonate]
 
         rc, stdout, stderr = await run_cli(
-            [
-                "gcloud", "container", "clusters", "describe", cluster_name,
-                "--project", project, loc_flag, loc_val, "--format=json",
-            ],
+            cmd,
             check=False,
         )
         if rc != 0:

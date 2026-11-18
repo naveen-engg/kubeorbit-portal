@@ -2,30 +2,33 @@
 AKS (Azure Kubernetes Service) provider adapter.
 
 Auth model:
-  - Local dev: relies on `az login` / `az account set` having already been
-    run interactively.
-  - Per-environment/team service principal auth: if `service_principal_env_prefix`
-    is set in config, `az login --service-principal` is performed using
-    `{prefix}AZURE_CLIENT_ID` / `{prefix}AZURE_CLIENT_SECRET` /
-    `{prefix}AZURE_TENANT_ID` env vars (never hardcoded), letting different
-    teams/environments use different service principals without code changes.
-    Login state is cached briefly to avoid re-authenticating on every request.
-  - kubeconfig context comes from `az aks get-credentials`, written directly
-    to this cluster's isolated kubeconfig via `--file`. Azure AD/Entra
-    RBAC-enabled clusters transparently prompt through `kubelogin` if it is
-    installed (see README) -- no extra code needed here.
-  - Pod-level auth in-cluster is Azure Workload Identity, detected from the
-    cluster's security profile + OIDC issuer being enabled.
+  1. Cloud Run / GCP Workload Identity Federation (Zero Keys):
+     - Queries the local GCP Metadata Server for a signed Google OIDC ID token
+       (`audience=api://AzureADTokenExchange`).
+     - Authenticates to Microsoft Entra ID via Federated Credentials:
+       `az login --service-principal -u <client_id> --tenant <tenant_id> --federated-token <oidc_token>`
+     - Runs `kubelogin convert-kubeconfig -l azurecli` so Entra ID RBAC clusters
+       mint non-interactive tokens automatically.
+  2. Service Principal with Secret (Fallback):
+     - Uses `{prefix}AZURE_CLIENT_ID`, `{prefix}AZURE_CLIENT_SECRET`, and
+       `{prefix}AZURE_TENANT_ID` from environment / Secret Manager.
+  3. Local dev:
+     - Relies on interactive `az login` session.
 
-Expected config.* keys (see config/clusters.example.yaml):
+Expected config.* keys:
   resource_group (required). cluster_name (optional, defaults to `name`).
-  subscription_id (optional). service_principal_env_prefix (optional).
+  subscription_id (optional). tenant_id (optional, for Federated/SP auth).
+  client_id (optional, Managed Identity / App Registration Client ID for Federated auth).
+  service_principal_env_prefix (optional).
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional
 
 from kube_client import CLIError, TTLCache, read_current_context, run_cli
@@ -51,6 +54,35 @@ _login_cache = TTLCache()
 _SP_LOGIN_TTL_SECONDS = 1800
 
 
+def _fetch_gcp_oidc_token(audience: str = "api://AzureADTokenExchange") -> Optional[str]:
+    """Fetch a signed Google OIDC ID token when running on GCP Cloud Run / GCE / GKE,
+    or from KUBEORBIT_GCP_OIDC_TOKEN_FILE if mounted. Returns None when not on GCP."""
+    token_file = os.environ.get("KUBEORBIT_GCP_OIDC_TOKEN_FILE")
+    if token_file and os.path.exists(token_file):
+        try:
+            with open(token_file, "r", encoding="utf-8") as fh:
+                return fh.read().strip() or None
+        except OSError:
+            pass
+
+    if not (os.environ.get("K_SERVICE") or os.environ.get("KUBEORBIT_USE_GCP_METADATA_OIDC", "").lower() == "true"):
+        return None
+
+    encoded_aud = urllib.parse.quote(audience, safe="")
+    url = (
+        f"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/"
+        f"default/identity?audience={encoded_aud}&format=full"
+    )
+    req = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
+    try:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.status == 200:
+                return resp.read().decode("utf-8").strip() or None
+    except Exception as exc:
+        logger.debug("GCP Metadata OIDC token fetch for Azure skipped/failed: %s", exc)
+    return None
+
+
 @register_provider("aks")
 class AKSProvider(BaseKubeProvider):
     def _resource_group(self) -> str:
@@ -65,34 +97,69 @@ class AKSProvider(BaseKubeProvider):
     def _sp_prefix(self) -> Optional[str]:
         return self.cluster.config.get("service_principal_env_prefix")
 
-    async def _ensure_login(self) -> None:
+    def _client_id(self) -> Optional[str]:
+        prefix = self._sp_prefix() or ""
+        return self.cluster.config.get("client_id") or (os.environ.get(f"{prefix}AZURE_CLIENT_ID") if prefix else None)
+
+    def _tenant_id(self) -> Optional[str]:
+        prefix = self._sp_prefix() or ""
+        return self.cluster.config.get("tenant_id") or (os.environ.get(f"{prefix}AZURE_TENANT_ID") if prefix else None)
+
+    async def _ensure_login(self) -> bool:
+        """Returns True if non-interactive Federated or Service Principal login was performed."""
         prefix = self._sp_prefix()
-        if not prefix:
-            return  # assume `az login` was already run interactively for local dev
+        client_id = self._client_id()
+        tenant_id = self._tenant_id()
+
+        if not prefix and not (client_id and tenant_id):
+            return False  # assume `az login` was already run interactively for local dev
+
+        cache_key = f"sp-login:{self.cluster.id}:{prefix or client_id}"
 
         async def factory():
-            import os
+            oidc_token = _fetch_gcp_oidc_token("api://AzureADTokenExchange")
+            if client_id and tenant_id and oidc_token:
+                logger.info(
+                    "Exchanging GCP Cloud Run OIDC token for Azure Entra ID Client '%s' (cluster=%s)",
+                    client_id, self.cluster.id,
+                )
+                try:
+                    await run_cli(
+                        [
+                            "az", "login", "--service-principal",
+                            "-u", client_id, "--tenant", tenant_id,
+                            "--federated-token", oidc_token,
+                        ]
+                    )
+                    return True
+                except CLIError as exc:
+                    raise ProviderAuthError(
+                        f"az login --federated-token failed for cluster '{self.cluster.id}': {exc.stderr or exc}"
+                    ) from exc
 
-            client_id = os.environ.get(f"{prefix}AZURE_CLIENT_ID")
-            client_secret = os.environ.get(f"{prefix}AZURE_CLIENT_SECRET")
-            tenant_id = os.environ.get(f"{prefix}AZURE_TENANT_ID")
+            # Fallback to Secret Manager / Environment Service Principal secret
+            eff_prefix = prefix or ""
+            c_id = client_id or os.environ.get(f"{eff_prefix}AZURE_CLIENT_ID")
+            c_secret = self.cluster.config.get("client_secret") or os.environ.get(f"{eff_prefix}AZURE_CLIENT_SECRET")
+            t_id = tenant_id or os.environ.get(f"{eff_prefix}AZURE_TENANT_ID")
             missing = [
                 name for name, val in (
-                    (f"{prefix}AZURE_CLIENT_ID", client_id),
-                    (f"{prefix}AZURE_CLIENT_SECRET", client_secret),
-                    (f"{prefix}AZURE_TENANT_ID", tenant_id),
+                    (f"{eff_prefix}AZURE_CLIENT_ID", c_id),
+                    (f"{eff_prefix}AZURE_CLIENT_SECRET", c_secret),
+                    (f"{eff_prefix}AZURE_TENANT_ID", t_id),
                 )
                 if not val
             ]
             if missing:
                 raise ProviderConfigError(
-                    f"cluster '{self.cluster.id}' (aks) needs env vars {missing} for its service principal"
+                    f"cluster '{self.cluster.id}' (aks) needs either Cloud Run OIDC Federation "
+                    f"(client_id + tenant_id) or env vars {missing} for its service principal"
                 )
             try:
                 await run_cli(
                     [
                         "az", "login", "--service-principal",
-                        "-u", client_id, "-p", client_secret, "--tenant", tenant_id,
+                        "-u", c_id, "-p", c_secret, "--tenant", t_id,
                     ]
                 )
             except CLIError as exc:
@@ -101,10 +168,11 @@ class AKSProvider(BaseKubeProvider):
                 ) from exc
             return True
 
-        await _login_cache.get_or_set(f"sp-login:{prefix}", _SP_LOGIN_TTL_SECONDS, factory)
+        await _login_cache.get_or_set(cache_key, _SP_LOGIN_TTL_SECONDS, factory)
+        return True
 
     async def authenticate(self) -> ClusterAuthResult:
-        await self._ensure_login()
+        used_sp_or_federation = await self._ensure_login()
         rg = self._resource_group()
         cluster_name = self._cluster_name()
         subscription = self._subscription()
@@ -124,6 +192,16 @@ class AKSProvider(BaseKubeProvider):
                 f"az aks get-credentials failed for '{cluster_name}': {exc.stderr or exc}"
             ) from exc
 
+        # Convert kubeconfig to use non-interactive azurecli token via kubelogin when running with SP/Federated auth
+        if used_sp_or_federation:
+            try:
+                await run_cli(
+                    ["kubelogin", "convert-kubeconfig", "-l", "azurecli", "--kubeconfig", str(self.kubeconfig_path)],
+                    check=False,
+                )
+            except Exception as exc:
+                logger.debug("kubelogin convert-kubeconfig skipped: %s", exc)
+
         context_name = read_current_context(self.kubeconfig_path)
         identity = await self._current_identity()
         return ClusterAuthResult(
@@ -141,9 +219,9 @@ class AKSProvider(BaseKubeProvider):
             account = {}
         return ProviderIdentity(
             provider="aks",
-            account=(account.get("user") or {}).get("name"),
+            account=(account.get("user") or {}).get("name") or self._client_id(),
             project_or_subscription=account.get("id") or self._subscription(),
-            impersonated_as=self._sp_prefix(),
+            impersonated_as=self._client_id() or self._sp_prefix(),
         )
 
     async def get_cluster_metadata(self) -> ClusterMeta:
@@ -192,10 +270,6 @@ class AKSProvider(BaseKubeProvider):
         api_access = data.get("apiServerAccessProfile") or {}
         addon_profiles = data.get("addonProfiles") or {}
 
-        # az aks show only surfaces a VNet name when a custom VNet was used
-        # (vnetSubnetID on a node pool) -- clusters on the AKS-managed
-        # default VNet have no such ID, which isn't an error, just means
-        # there's no customer-owned VNet to name.
         vnet_subnet_id = next(
             (p.get("vnetSubnetID") for p in data.get("agentPoolProfiles", []) or [] if p.get("vnetSubnetID")),
             None,
@@ -249,14 +323,15 @@ class AKSProvider(BaseKubeProvider):
         total = 0.0
         any_priced = False
         for pool in node_pools:
-            price, note = None, None
+            price = None
+            note = None
             if pool.machine_type:
                 try:
                     price = await fetch_azure_vm_hourly_price(meta.location, pool.machine_type)
                 except Exception as exc:
                     note = f"Pricing lookup failed: {exc}"
             if price is None and note is None:
-                note = f"No public retail price found for '{pool.machine_type}' in '{meta.location}'."
+                note = f"No public pay-as-you-go Linux price found for '{pool.machine_type}' in {meta.location}."
 
             monthly = price * pool.node_count * _AVG_HOURS_PER_MONTH if price is not None else None
             if price is not None:
@@ -270,35 +345,29 @@ class AKSProvider(BaseKubeProvider):
         return CostEstimate(
             provider="aks", pools=pools,
             monthly_total_usd=round(total, 2) if any_priced else None,
-            error=None if any_priced else "No node pools could be priced (see per-pool notes).",
+            error=None if any_priced else "No agent pools could be priced.",
         )
 
     def get_console_url(self) -> str:
-        subscription = self._subscription() or "-"
-        rg = self._resource_group()
-        cluster_name = self._cluster_name()
+        sub = self._subscription() or "<subscription>"
         return (
-            f"https://portal.azure.com/#resource/subscriptions/{subscription}/resourceGroups/"
-            f"{rg}/providers/Microsoft.ContainerService/managedClusters/{cluster_name}/overview"
+            f"https://portal.azure.com/#@/resource/subscriptions/{sub}/resourceGroups/"
+            f"{self._resource_group()}/providers/Microsoft.ContainerService/managedClusters/"
+            f"{self._cluster_name()}/overview"
         )
 
     def get_logs_url(self) -> Optional[str]:
-        # Unlike GKE/EKS, an AKS cluster's Log Analytics workspace is a
-        # separate Azure resource with no derivable naming convention -- a
-        # cluster may have none, or one arbitrary workspace. Requires
-        # config.log_analytics_workspace_id (full ARM resource ID) to be set
-        # at registration time; no default to fall back to.
         workspace_id = self.cluster.config.get("log_analytics_workspace_id")
         if not workspace_id:
             return None
-        return f"https://portal.azure.com/#@/resource{workspace_id}/logs"
+        return f"https://portal.azure.com/#blade/Microsoft_OperationsManagementSuite_Workspace/LogsBlade/resourceId/{workspace_id.lstrip('/')}"
 
     def get_workload_identity_info(self) -> Dict[str, Any]:
         return {
-            "mechanism": "Azure AD Workload Identity",
-            "docs_url": "https://learn.microsoft.com/azure/aks/workload-identity-overview",
+            "mechanism": "Azure Workload Identity (Entra ID)",
+            "docs_url": "https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview",
             "description": (
-                "Federates a Kubernetes ServiceAccount with a Microsoft Entra ID app "
-                "via an OIDC issuer, so pods obtain Azure AD tokens without node identity."
+                "Federates a Kubernetes ServiceAccount with an Azure Managed Identity or "
+                "Entra Application via the cluster's OIDC issuer."
             ),
         }

@@ -116,6 +116,9 @@ export const api = {
   onboardCluster: (data) =>
     apiFetch("/api/admin/clusters", { method: "POST", body: JSON.stringify(data) }),
 
+  updateCluster: (clusterId, data) =>
+    apiFetch(`/api/admin/clusters/${encodeURIComponent(clusterId)}`, { method: "PUT", body: JSON.stringify(data) }),
+
   deleteCluster: (clusterId) =>
     apiFetch(`/api/admin/clusters/${encodeURIComponent(clusterId)}`, { method: "DELETE" }),
 

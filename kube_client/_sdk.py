@@ -8,6 +8,7 @@ path here doesn't (yet) special-case.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,33 +30,40 @@ def kubeconfig_path_for_cluster(cluster_id: str) -> Path:
     return get_runtime_env().kubeconfig_home / f"{cluster_id}.yaml"
 
 
-def read_current_context(kubeconfig_path: Path) -> str:
+def read_current_context(kubeconfig_path: Path | str) -> str:
+    p = Path(kubeconfig_path)
     try:
-        with kubeconfig_path.open("r", encoding="utf-8") as fh:
+        with p.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
     except FileNotFoundError:
-        raise CLIError(["kubeconfig"], None, f"kubeconfig not found at {kubeconfig_path}") from None
+        raise CLIError(["kubeconfig"], None, f"kubeconfig not found at {p}") from None
     ctx = data.get("current-context")
     if not ctx:
-        raise CLIError(["kubeconfig"], None, f"kubeconfig at {kubeconfig_path} has no current-context")
+        raise CLIError(["kubeconfig"], None, f"kubeconfig at {p} has no current-context")
     return ctx
 
 
 _api_client_pool: Dict[str, kubernetes.client.ApiClient] = {}
+_pool_lock = threading.Lock()
 
 
 def _get_or_create_sdk_client(context: str, kubeconfig_path: Path) -> kubernetes.client.ApiClient:
     pool_key = f"{context}:{kubeconfig_path.resolve()}"
-    if pool_key in _api_client_pool:
-        return _api_client_pool[pool_key]
+    with _pool_lock:
+        if pool_key in _api_client_pool:
+            return _api_client_pool[pool_key]
 
-    cfg_file = str(kubeconfig_path) if kubeconfig_path.exists() else None
-    client = kubernetes.config.new_client_from_config(
-        config_file=cfg_file,
-        context=context,
-    )
-    _api_client_pool[pool_key] = client
-    return client
+        cfg_file = str(kubeconfig_path) if kubeconfig_path.exists() else None
+        cfg = kubernetes.client.Configuration()
+        kubernetes.config.load_kube_config(
+            config_file=cfg_file,
+            context=context,
+            client_configuration=cfg,
+        )
+        cfg.connection_pool_maxsize = 32
+        client = kubernetes.client.ApiClient(configuration=cfg)
+        _api_client_pool[pool_key] = client
+        return client
 
 
 def _sync_sdk_list(
@@ -75,15 +83,20 @@ def _sync_sdk_list(
 
     try:
         raw = None
+        req_timeout = 8
         if r in ("nodes", "node", "no"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_node()
+            raw = api.list_node(_request_timeout=req_timeout)
         elif r in ("namespaces", "namespace", "ns"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespace()
+            raw = api.list_namespace(_request_timeout=req_timeout)
         elif r in ("pods", "pod", "po"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_pod(namespace=namespace) if namespace else api.list_pod_for_all_namespaces()
+            raw = (
+                api.list_namespaced_pod(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_pod_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("deployments", "deployment", "deploy"):
             api = kubernetes.client.AppsV1Api(api_client=client)
             raw = api.list_namespaced_deployment(namespace=namespace) if namespace else api.list_deployment_for_all_namespaces()
@@ -126,6 +139,15 @@ def _sync_sdk_list(
         elif r in ("ingresses", "ingress", "ing"):
             api = kubernetes.client.NetworkingV1Api(api_client=client)
             raw = api.list_namespaced_ingress(namespace=namespace) if namespace else api.list_ingress_for_all_namespaces()
+        elif r in ("replicasets", "replicaset", "rs"):
+            api = kubernetes.client.AppsV1Api(api_client=client)
+            raw = api.list_namespaced_replica_set(namespace=namespace) if namespace else api.list_replica_set_for_all_namespaces()
+        elif r in ("networkpolicies", "networkpolicy", "netpol"):
+            api = kubernetes.client.NetworkingV1Api(api_client=client)
+            raw = api.list_namespaced_network_policy(namespace=namespace) if namespace else api.list_network_policy_for_all_namespaces()
+        elif r in ("horizontalpodautoscalers", "horizontalpodautoscaler", "hpa"):
+            api = kubernetes.client.AutoscalingV2Api(api_client=client)
+            raw = api.list_namespaced_horizontal_pod_autoscaler(namespace=namespace) if namespace else api.list_horizontal_pod_autoscaler_for_all_namespaces()
         elif r in ("gateways", "gateway", "gtw"):
             api = kubernetes.client.CustomObjectsApi(api_client=client)
             if namespace:
@@ -148,11 +170,11 @@ def _sync_sdk_list(
             return (sanitized or {}).get("items", []), True
     except ApiException as e:
         if e.status == 404:
-            return [], False
-        logger.debug("SDK call for %s on %s returned HTTP %s, falling back to CLI", resource, context, e.status)
+            return None, False
+        logger.debug("SDK list failed for %s (%s), falling back to CLI", resource, e)
         return None, False
     except Exception as e:
-        logger.debug("SDK call for %s on %s encountered error (%s), falling back to CLI", resource, context, e)
+        logger.debug("SDK list failed for %s (%s), falling back to CLI", resource, e)
         return None, False
 
     return None, False

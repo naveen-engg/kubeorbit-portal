@@ -1,0 +1,9 @@
+aws_region            = "us-east-1"
+cluster_name          = "kubeorbit-eks"
+kubernetes_version    = "1.30"
+environment           = "sandbox"
+cloudrun_sa_unique_id = "112233445566778899000" # Paste runner_sa_unique_id from terraform/cloud-run
+node_instance_types   = ["t3.medium"]
+desired_size          = 2
+min_size              = 1
+max_size              = 3

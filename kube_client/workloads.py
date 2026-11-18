@@ -253,15 +253,27 @@ async def get_logical_applications(
 async def get_pod_inspector(
     context: str, kubeconfig: Path, namespace: str, pod_name: str
 ) -> Dict[str, Any]:
-    """Return in-depth details of a pod including probes, container resources, restart reasons, and logs."""
-    rc, stdout, stderr = await run_cli(
-        ["kubectl", "get", "pod", pod_name, "-n", namespace, "-o", "json"],
-        env={"KUBECONFIG": str(kubeconfig)},
-        check=True,
+    """Return in-depth details of a pod including probes, container resources,
+    restart reasons, 12-Step pipeline lifecycle status, and logs."""
+    from .resources import get_events
+
+    (_, stdout, _), events, services = await asyncio.gather(
+        run_cli(
+            ["kubectl", "--kubeconfig", str(kubeconfig), "--context", context, "get", "pod", pod_name, "-n", namespace, "-o", "json"],
+            env={"KUBECONFIG": str(kubeconfig)},
+            check=True,
+        ),
+        get_events(context, kubeconfig, namespace, limit=100),
+        get_services(context, kubeconfig, namespace),
     )
     pod_data = json.loads(stdout)
-    spec = pod_data.get("spec", {})
-    status = pod_data.get("status", {})
+    meta = pod_data.get("metadata", {}) or {}
+    spec = pod_data.get("spec", {}) or {}
+    status = pod_data.get("status", {}) or {}
+    pod_labels = meta.get("labels") or {}
+    conds_by_type = {c.get("type"): c for c in (status.get("conditions") or []) if c.get("type")}
+    pod_events = [e for e in events if e.get("involved_name") == pod_name or pod_name in (e.get("message") or "")]
+    event_reasons = {e.get("reason", "") for e in pod_events}
 
     containers_info = []
     statuses_by_name = {cs["name"]: cs for cs in status.get("containerStatuses", [])}
@@ -313,6 +325,94 @@ async def get_pod_inspector(
             "volume_mounts": [vm["name"] for vm in c.get("volumeMounts", [])],
         })
 
+    # Compute 12-Step Lifecycle Checklist for this Pod
+    owner_refs = meta.get("ownerReferences") or []
+    owner_str = f"{owner_refs[0].get('kind')}/{owner_refs[0].get('name')}" if owner_refs else "Standalone Pod"
+    node_name = spec.get("nodeName")
+    pod_scheduled = (conds_by_type.get("PodScheduled") or {}).get("status") == "True" or bool(node_name)
+    sched_msg = (conds_by_type.get("PodScheduled") or {}).get("message") or f"Bound to node {node_name}" if node_name else "Unscheduled (Pending)"
+
+    has_mount_err = "FailedMount" in event_reasons or "FailedAttachVolume" in event_reasons
+    has_cni_err = "FailedCreatePodSandBox" in event_reasons
+    pod_ip = status.get("podIP")
+    csi_cni_ok = pod_scheduled and not has_mount_err and not has_cni_err and bool(pod_ip)
+    csi_cni_detail = (
+        next((e["message"] for e in pod_events if e.get("reason") in ("FailedMount", "FailedAttachVolume", "FailedCreatePodSandBox")), "")
+        if (has_mount_err or has_cni_err)
+        else (f"Pod IP {pod_ip} allocated & volumes mounted" if pod_ip else "Waiting for CSI volume mount / CNI sandbox")
+    )
+
+    waiting_reasons = [c.get("waiting_reason") for c in containers_info if c.get("waiting_reason")]
+    runtime_ok = csi_cni_ok and not waiting_reasons and all(c.get("state") == "running" for c in containers_info)
+    runtime_detail = (
+        f"Stalled: {', '.join(waiting_reasons)}"
+        if waiting_reasons
+        else ("All containers running in containerd" if runtime_ok else "Waiting for container startup")
+    )
+
+    ready_cond = (conds_by_type.get("Ready") or {}).get("status") == "True"
+    unhealthy_ev = next((e["message"] for e in pod_events if e.get("reason") == "Unhealthy"), None)
+    probe_detail = (
+        "Readiness & startup probes passing (Ready=True)"
+        if ready_cond
+        else (unhealthy_ev or "Pod Ready=False (readiness probe failing or pending)")
+    )
+
+    matching_svcs = [
+        s["name"]
+        for s in services
+        if s.get("selector") and all(pod_labels.get(k) == v for k, v in s["selector"].items())
+    ]
+    step12_ok = ready_cond and len(matching_svcs) > 0
+    step12_detail = (
+        f"Active in EndpointSlice for Service(s): {', '.join(matching_svcs)}"
+        if step12_ok
+        else (
+            f"Excluded from Service({', '.join(matching_svcs)}) EndpointSlice because Ready=False"
+            if matching_svcs
+            else "No Service selector matches this Pod's labels"
+        )
+    )
+
+    pipeline_steps = [
+        {
+            "step": "Steps 1–8",
+            "title": "API Server, etcd & Controller",
+            "status": "passed",
+            "detail": f"Admitted, stored in etcd & created by {owner_str}",
+        },
+        {
+            "step": "Step 9",
+            "title": "kube-scheduler (Filter / Score / Bind)",
+            "status": "passed" if pod_scheduled else "failed",
+            "detail": sched_msg,
+        },
+        {
+            "step": "Step 10a/b",
+            "title": "kubelet CSI Mount & CNI Network",
+            "status": "passed" if csi_cni_ok else ("failed" if (has_mount_err or has_cni_err) else "pending"),
+            "detail": csi_cni_detail,
+        },
+        {
+            "step": "Step 10c/d",
+            "title": "kubelet Image Pull & containerd Runtime",
+            "status": "passed" if runtime_ok else ("failed" if waiting_reasons else "pending"),
+            "detail": runtime_detail,
+        },
+        {
+            "step": "Step 11",
+            "title": "Readiness & Startup Probes",
+            "status": "passed" if ready_cond else ("failed" if (runtime_ok or unhealthy_ev) else "pending"),
+            "detail": probe_detail,
+        },
+        {
+            "step": "Step 12",
+            "title": "EndpointSlice & Service Traffic",
+            "status": "passed" if step12_ok else ("warning" if not matching_svcs else "failed"),
+            "detail": step12_detail,
+        },
+    ]
+
     # Fetch recent logs for primary container
     primary_container = containers_info[0]["name"] if containers_info else None
     logs = ""
@@ -326,12 +426,14 @@ async def get_pod_inspector(
         "name": pod_name,
         "namespace": namespace,
         "phase": status.get("phase", "Unknown"),
-        "node_name": spec.get("nodeName"),
-        "pod_ip": status.get("podIP"),
+        "node_name": node_name,
+        "pod_ip": pod_ip,
         "host_ip": status.get("hostIP"),
         "start_time": status.get("startTime"),
         "containers": containers_info,
         "conditions": status.get("conditions", []),
+        "pipeline_steps": pipeline_steps,
+        "matching_services": matching_svcs,
         "recent_logs": logs,
-        "labels": pod_data.get("metadata", {}).get("labels", {}),
+        "labels": pod_labels,
     }

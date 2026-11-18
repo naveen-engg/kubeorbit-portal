@@ -1,0 +1,33 @@
+project_id      = "adk-enterprise-observability"
+region          = "us-central1"
+service_name    = "kubeorbit"
+container_image = "us-central1-docker.pkg.dev/adk-enterprise-observability/kubeorbit-repo/kubeorbit:enterprise"
+
+# --------------------------------------------------------------------------- #
+# 3-Tier GCP Custom IAM Role Assignments + Automatic IAP Access
+# (Supports personal @gmail.com accounts via 'user:...' or verified domains)
+# --------------------------------------------------------------------------- #
+admin_members = [
+  "user:your-admin@gmail.com",
+]
+
+operator_members = [
+  "user:sre-operator@gmail.com",
+]
+
+viewer_members = [
+  "user:dev-viewer@gmail.com",
+]
+
+# Leave empty if using @gmail.com accounts; set to "yourcompany.com" only if
+# you register a domain and link it to Google Workspace or Cloud Identity Free.
+viewer_domain = ""
+
+# --------------------------------------------------------------------------- #
+# Custom OAuth 2.0 Web Client for External Accounts (@zohomail.com / @gmail.com)
+# Required when authenticating non-Workspace users through Cloud Run Direct IAP.
+# Redirect URI on the OAuth client must be:
+#   https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect
+# --------------------------------------------------------------------------- #
+iap_oauth_client_id     = ""
+iap_oauth_client_secret = ""

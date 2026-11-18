@@ -60,7 +60,44 @@ const state = {
   loadTokens: {},
   aiChatSessionId: null,
   aiChatMessages: [],
+  userRole: "admin",
+  userSubject: "anonymous",
 };
+
+function canAdmin() {
+  return state.userRole === "admin";
+}
+
+function canOperate() {
+  return state.userRole === "admin" || state.userRole === "operator";
+}
+
+function applyRoleVisibility() {
+  const roleBadge = $("topbar-role-badge");
+  if (roleBadge) {
+    const r = (state.userRole || "viewer").toLowerCase();
+    roleBadge.textContent = r.toUpperCase();
+    roleBadge.title = `Signed in as ${state.userSubject} (Role: ${r.toUpperCase()})`;
+    if (r === "admin") {
+      roleBadge.style.background = "var(--accent-soft)";
+      roleBadge.style.color = "var(--accent)";
+    } else if (r === "operator") {
+      roleBadge.style.background = "rgba(245, 158, 11, 0.14)";
+      roleBadge.style.color = "var(--warning)";
+    } else {
+      roleBadge.style.background = "rgba(16, 185, 129, 0.14)";
+      roleBadge.style.color = "var(--success)";
+    }
+  }
+
+  const adminButtons = ["onboard-trigger", "onboard-trigger-sidebar", "clusters-page-add-btn", "clusters-modal-add-btn"];
+  adminButtons.forEach((id) => {
+    const el = $(id);
+    if (el) {
+      el.style.display = canAdmin() ? "" : "none";
+    }
+  });
+}
 
 // Each named loader gets a monotonically increasing token. If a namespace
 // switch (or an auto-refresh tick) fires a new request before an in-flight
@@ -234,7 +271,17 @@ function restoreSelectionOrDefault() {
 
 async function populateNamespaceSelects(clusterId) {
   const includeSystem = $("namespaces-include-system")?.checked || false;
-  const general = (await api.getNamespaces(clusterId, false)).items;
+  const rawGeneral = (await api.getNamespaces(clusterId, false)).items;
+  // Put non-default workload namespaces (e.g. kubeorbit-demo) ahead of "default"
+  // so single-namespace views (Resource Map, Network, Storage, Namespaces) open
+  // directly into an active application namespace rather than an empty "default".
+  const general = [...rawGeneral].sort((a, b) => {
+    const aName = typeof a === "string" ? a : a.name;
+    const bName = typeof b === "string" ? b : b.name;
+    if (aName === "default" && bName !== "default") return 1;
+    if (bName === "default" && aName !== "default") return -1;
+    return aName.localeCompare(bName);
+  });
   setSidebarCount("count-namespaces", general.length);
 
   fillSelect($("workloads-namespace-select"), general, { placeholder: "All namespaces (excl. system)" });
@@ -438,29 +485,6 @@ function renderOverview(data) {
     )
   );
 
-  children.push(
-    panel(
-      "Helm Releases",
-      helm.available
-        ? dataTable(
-            [
-              { key: "name", label: "Release", mono: true },
-              { key: "namespace", label: "Namespace", mono: true },
-              { key: "chart", label: "Chart", mono: true },
-              { key: "app_version", label: "App Version" },
-              { key: "revision", label: "Revision" },
-              { key: "status", label: "Status" },
-            ],
-            helm.items,
-            { emptyTitle: "No Helm releases found" }
-          )
-        : emptyState("Helm not available", "The `helm` CLI is not installed on the server running KubeOrbit.")
-    )
-  );
-
-  children.push(panel("Estimated Monthly Cost", h("div", { id: "cost-panel-content" }, loadingSkeleton(2)), null, true));
-  children.push(panel("Ecosystem & Integrations", h("div", { id: "ecosystem-panel-content" }, loadingSkeleton(2)), null, true));
-
   if (meta.console_url || meta.logs_url) {
     children.push(h("div", { style: "display:flex;gap:8px;flex-wrap:wrap;" }, [
       meta.console_url ? h("a", { href: meta.console_url, target: "_blank", rel: "noopener noreferrer", class: "btn btn--ghost" }, `Open in ${badge.cloud} Console ↗`) : null,
@@ -469,6 +493,124 @@ function renderOverview(data) {
   }
 
   renderInto($("overview-content"), h("div", {}, children));
+}
+
+async function loadHelmView() {
+  const container = $("helm-content");
+  if (!container) return;
+  const token = nextLoadToken("helm");
+  renderInto(container, loadingSkeleton());
+  try {
+    const helm = await api.getHelm(state.selectedClusterId);
+    if (isStaleToken("helm", token)) return;
+    const items = helm.items || [];
+    const deployedCount = items.filter((i) => (i.status || "").toLowerCase() === "deployed").length;
+    const nsCount = new Set(items.map((i) => i.namespace).filter(Boolean)).size;
+    renderInto(container, h("div", {}, [
+      statGrid([
+        statCard("Total Releases", items.length, null, STAT_ICONS.layers),
+        statCard("Deployed", deployedCount, null, STAT_ICONS.checkCircle),
+        statCard("Namespaces", nsCount, null, STAT_ICONS.folder),
+      ]),
+      panel(
+        "Helm Releases",
+        helm.available
+          ? dataTable(
+              [
+                { key: "name", label: "Release", mono: true },
+                { key: "namespace", label: "Namespace", mono: true },
+                { key: "chart", label: "Chart", mono: true },
+                { key: "app_version", label: "App Version" },
+                { key: "revision", label: "Revision" },
+                { key: "status", label: "Status" },
+              ],
+              items,
+              { emptyTitle: "No Helm releases found" }
+            )
+          : emptyState("Helm not available", "The `helm` CLI is not installed on the server running KubeOrbit.")
+      ),
+    ]));
+  } catch (err) {
+    if (isStaleToken("helm", token)) return;
+    renderInto(container, errorState(err, loadHelmView));
+  }
+}
+
+async function loadEcosystemView() {
+  const container = $("ecosystem-view-content");
+  if (!container) return;
+  const token = nextLoadToken("ecosystem-view");
+  renderInto(container, loadingSkeleton());
+  try {
+    const data = await api.getEcosystemOverview(state.selectedClusterId);
+    if (isStaleToken("ecosystem-view", token)) return;
+    const all = data.integrations || [];
+    const detected = all.filter((i) => i.installed);
+    renderInto(container, h("div", {}, [
+      statGrid([
+        statCard("Categories Checked", data.total_checked || all.length, null, STAT_ICONS.grid),
+        statCard("Installed Integrations", detected.length, null, STAT_ICONS.checkCircle),
+      ]),
+      panel(
+        "Detected Platform & CNCF Integrations",
+        detected.length
+          ? h("div", { style: "padding:1rem;display:flex;flex-wrap:wrap;gap:10px;" }, detected.map((i) =>
+              h("span", {
+                style: "display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-size:0.85rem;font-weight:600;"
+              }, [i.category, h("span", { style: "opacity:0.75;font-weight:700;" }, `${i.total_count}`)])
+            ))
+          : emptyState("No ecosystem CRDs detected", `Checked ${data.total_checked || 11} categories (cert-manager, KEDA, Karpenter, Velero, External Secrets, Kyverno, CloudNativePG, Knative, Trivy, Argo CD, Flux).`),
+        null,
+        true
+      ),
+    ]));
+  } catch (err) {
+    if (isStaleToken("ecosystem-view", token)) return;
+    renderInto(container, errorState(err, loadEcosystemView));
+  }
+}
+
+async function loadCostView() {
+  const container = $("cost-view-content");
+  if (!container) return;
+  const token = nextLoadToken("cost-view");
+  renderInto(container, loadingSkeleton());
+  try {
+    const data = await api.getCostEstimate(state.selectedClusterId);
+    if (isStaleToken("cost-view", token)) return;
+    const pools = data.pools || [];
+    const totalNodes = pools.reduce((s, p) => s + (p.node_count || 0), 0);
+    const monthlyFormatted = data.monthly_total_usd != null ? `$${data.monthly_total_usd.toFixed(2)}/mo` : "—";
+    renderInto(container, h("div", {}, [
+      statGrid([
+        statCard("Estimated Monthly Compute", monthlyFormatted, null, STAT_ICONS.pulse),
+        statCard("Node Pools", pools.length, null, STAT_ICONS.layers),
+        statCard("Total Nodes", totalNodes, null, STAT_ICONS.server),
+        statCard("Provider", (data.provider || "—").toUpperCase(), null, STAT_ICONS.cloud),
+      ]),
+      data.error && !data.monthly_total_usd ? warningBanner(data.error) : null,
+      panel(
+        "Node Pool Cost Breakdown",
+        dataTable(
+          [
+            { key: "name", label: "Pool Name", mono: true },
+            { label: "Machine Type", mono: true, render: (p) => p.machine_type || "—" },
+            { key: "node_count", label: "Nodes" },
+            { label: "Hourly Rate / Node", mono: true, render: (p) => (p.hourly_price_usd != null ? `$${p.hourly_price_usd.toFixed(4)}/hr` : "—") },
+            { label: "Estimated Monthly", mono: true, render: (p) => (p.priced && p.monthly_estimate_usd != null ? `$${p.monthly_estimate_usd.toFixed(2)}/mo` : p.note || "unpriced") },
+          ],
+          pools,
+          { emptyTitle: "No node pools reported for cost estimation" }
+        )
+      ),
+      data.disclaimer
+        ? h("div", { style: "margin-top:12px;padding:12px 16px;border-radius:12px;background:var(--bg-inset);border:1px solid var(--border);font-size:0.78rem;color:var(--fg-subtle);line-height:1.5;" }, data.disclaimer)
+        : null,
+    ].filter(Boolean)));
+  } catch (err) {
+    if (isStaleToken("cost-view", token)) return;
+    renderInto(container, errorState(err, loadCostView));
+  }
 }
 
 // Cost estimation shells out to a cloud pricing API (slow on first call for
@@ -687,31 +829,144 @@ async function loadWorkloads() {
 
 // -- view: namespace resources ----------------------------------------
 
+function renderNamespacePodCard(pod, namespace) {
+  const isRunning = pod.status === "Running" || pod.status === "Succeeded";
+  const statusLabel = pod.reason || pod.status || "Unknown";
+  const res = pod.resources || {};
+  const cpuPct = res.cpu_pct ?? 0;
+  const memPct = res.mem_pct ?? 0;
+  const usedCpu = res.used_cpu_str || "0m";
+  const usedMem = res.used_mem_str || "0Mi";
+  const reqCpu = res.req_cpu_str || "—";
+  const reqMem = res.req_mem_str || "—";
+  const limCpu = res.lim_cpu_str || "—";
+  const limMem = res.lim_mem_str || "—";
+
+  const shortNode = pod.node
+    ? (pod.node.length > 26 ? `...${pod.node.slice(-22)}` : pod.node)
+    : null;
+  const shortPodName = pod.name && pod.name.length > 26
+    ? `${pod.name.slice(0, 23)}...`
+    : (pod.name || "pod");
+
+  return h("div", { class: "cmap-card ns-pod-card" }, [
+    // Header row: status dot, pod name, status pill, and Logs / YAML / Inspect action buttons
+    h("div", { class: "cmap-card__header" }, [
+      h("div", { class: "cmap-card__name-row" }, [
+        h("span", { class: `cmap-status-dot ${isRunning ? "cmap-status-dot--ok" : "cmap-status-dot--bad"}` }),
+        h("span", {
+          class: "cmap-card__name",
+          title: pod.name,
+          style: "cursor:pointer;",
+          onclick: () => openPodInspectorModal(pod.name, namespace || pod.namespace),
+        }, shortPodName),
+        statusPill(statusLabel, isRunning),
+      ]),
+      h("div", { style: "display:flex;align-items:center;gap:6px;" }, [
+        h("button", {
+          class: "btn btn--secondary btn--sm",
+          style: "padding:0.25rem 0.65rem;font-size:0.76rem;font-weight:700;",
+          onclick: () => openPodInspectorModal(pod.name, namespace || pod.namespace),
+          title: "Inspect probes, containers & specs",
+        }, "Inspect"),
+        h("button", {
+          class: "btn btn--secondary btn--sm",
+          style: "padding:0.25rem 0.65rem;font-size:0.76rem;font-weight:700;",
+          onclick: () => openLogsModal(pod.name, namespace || pod.namespace),
+        }, "Logs"),
+        h("button", {
+          class: "btn btn--secondary btn--sm",
+          style: "padding:0.25rem 0.65rem;font-size:0.76rem;font-weight:700;",
+          onclick: () => openManifestModal("Pod", pod.name, namespace || pod.namespace),
+        }, "YAML"),
+      ]),
+    ]),
+
+    // Metadata chip pills row: Ready X/Y | N restarts | age | node | Pod IP / QoS
+    h("div", { class: "cmap-card__chips" }, [
+      h("span", { class: "cmap-chip" }, `Ready ${pod.ready || "0/0"}`),
+      h("span", {
+        class: "cmap-chip",
+        style: (pod.restarts || 0) > 0 ? "background:var(--warning-soft);color:var(--warning);" : "",
+      }, `${pod.restarts ?? 0} restarts`),
+      pod.created_at ? h("span", { class: "cmap-chip" }, timeAgo(pod.created_at)) : null,
+      shortNode ? h("span", { class: "cmap-chip", title: pod.node, style: "font-family:var(--font-mono);" }, shortNode) : null,
+      pod.pod_ip ? h("span", { class: "cmap-chip", style: "font-family:var(--font-mono);" }, pod.pod_ip) : null,
+    ].filter(Boolean)),
+
+    // Two radial gauges (CPU & MEM) matching the Cluster Map aesthetic
+    h("div", { class: "cmap-gauges", style: "padding:6px 0;" }, [
+      radialGauge(cpuPct, "CPU", `${usedCpu} / ${limCpu !== "—" ? limCpu : reqCpu} limit`, "#3b82f6"),
+      radialGauge(memPct, "MEM", `${usedMem} / ${limMem !== "—" ? limMem : reqMem} limit`, "#8b5cf6"),
+    ]),
+
+    // Footer row: Req CPU · Mem on left, Limit CPU · Mem on right
+    h("div", {
+      style: "display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding-top:6px;border-top:1px solid var(--border);font-size:0.72rem;color:var(--fg-subtle);font-weight:600;",
+    }, [
+      h("span", {}, `Req ${reqCpu} CPU \u00b7 ${reqMem}`),
+      h("span", {}, `Limit ${limCpu} CPU \u00b7 ${limMem}`),
+    ]),
+  ]);
+}
+
+function triggerGaugeAnimations(container) {
+  if (!container) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      container.querySelectorAll(".cmap-gauge__fill").forEach((el) => {
+        el.style.strokeDashoffset = el.dataset.targetOffset;
+      });
+    });
+  });
+}
+
+function openConfigMapModal(cm, clusterId, namespace) {
+  lastFocusedBeforeModal = document.activeElement;
+  $("resource-modal-title").textContent = `ConfigMap — ${cm.name}`;
+  const previewEntries = Object.entries(cm.data_preview || {});
+  const rows = previewEntries.map(([k, v]) =>
+    h("div", { class: "kv-row" }, [
+      h("div", { class: "kv-row__key" }, k),
+      h("div", { class: "kv-row__value" }, v || "—"),
+    ])
+  );
+  $("resource-modal-body").replaceChildren(
+    h("div", { style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;" }, [
+      h("div", { class: "actions-row" }, [
+        pill("CONFIGMAP", "info"),
+        pill(`${cm.key_count || 0} keys`, "healthy"),
+      ]),
+      h("button", {
+        class: "btn btn--secondary btn--sm",
+        onclick: () => {
+          closeResourceModal();
+          openManifestModal("ConfigMap", cm.name, namespace);
+        },
+      }, "Full YAML"),
+    ]),
+    h("div", { class: "kv-list" }, rows.length ? rows : [emptyState("Empty ConfigMap", "This ConfigMap has no data keys.")])
+  );
+  $("resource-modal").hidden = false;
+  $("resource-modal-close").focus();
+}
+
 function renderNamespaceResources(data, { clusterId, namespace }) {
   const gatewayUnavailable = () =>
     emptyState("Gateway API not installed", "This cluster does not have the Gateway API CRDs registered.");
 
-  // One full-width table at a time (switched via the subtabs row below)
-  // instead of eight cramped side-by-side mini-tables -- at typical panel
-  // widths, several small columns squeezed into a ~300px card forced pod
-  // names and status text to wrap into an illegible stack of fragments.
   const sections = [
     {
       key: "pods",
       label: "Pods",
       count: data.pods.length,
-      render: () =>
-        dataTable(
-          [
-            { key: "name", label: "Name", mono: true, truncate: true },
-            { label: "Status", render: (r) => statusPill(r.status) },
-            { key: "ready", label: "Ready", mono: true },
-            { key: "restarts", label: "Restarts" },
-            { key: "node", label: "Node", mono: true, truncate: true },
-            { label: "Age", render: (r) => timeAgo(r.created_at) },
-          ],
-          data.pods
-        ),
+      isCards: true,
+      render: () => {
+        if (!data.pods.length) {
+          return emptyState("No pods in this namespace", `Namespace '${namespace}' has no running or pending pods.`);
+        }
+        return h("div", { class: "cmap-grid" }, data.pods.map((p) => renderNamespacePodCard(p, namespace)));
+      },
     },
     {
       key: "services",
@@ -721,12 +976,40 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
         dataTable(
           [
             { key: "name", label: "Name", mono: true, truncate: true },
-            { key: "type", label: "Type" },
+            { label: "Type", render: (r) => pill(r.type || "ClusterIP", r.type === "LoadBalancer" ? "healthy" : "info") },
             { key: "cluster_ip", label: "Cluster IP", mono: true },
             { label: "External", render: (r) => (r.external_ips || []).join(", ") || "—" },
-            { label: "Ports", render: (r) => (r.ports || []).map((p) => `${p.port}/${p.protocol}`).join(", ") || "—" },
+            {
+              label: "Ports (Port → Target)",
+              mono: true,
+              render: (r) =>
+                (r.ports || [])
+                  .map((p) => `${p.port}${p.target_port && p.target_port !== p.port ? `→${p.target_port}` : ""}/${p.protocol || "TCP"}`)
+                  .join(", ") || "—",
+            },
+            {
+              label: "Selector",
+              mono: true,
+              render: (r) => {
+                const entries = Object.entries(r.selector || {});
+                return entries.length ? entries.map(([k, v]) => `${k}=${v}`).join(", ") : "—";
+              },
+            },
+            { label: "Age", render: (r) => timeAgo(r.created_at) },
+            {
+              label: "Actions",
+              render: (r) =>
+                h("div", { style: "display:flex;gap:6px;" }, [
+                  h("button", {
+                    class: "btn btn--secondary btn--sm",
+                    style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                    onclick: () => openManifestModal("Service", r.name, namespace),
+                  }, "YAML"),
+                ]),
+            },
           ],
-          data.services
+          data.services,
+          { emptyTitle: "No services in this namespace" }
         ),
     },
     {
@@ -738,9 +1021,32 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
           [
             { key: "name", label: "Name", mono: true, truncate: true },
             { key: "key_count", label: "Keys" },
+            {
+              label: "Key Names",
+              mono: true,
+              truncate: true,
+              render: (r) => Object.keys(r.data_preview || {}).join(", ") || "—",
+            },
             { label: "Age", render: (r) => timeAgo(r.created_at) },
+            {
+              label: "Actions",
+              render: (r) =>
+                h("div", { style: "display:flex;gap:6px;" }, [
+                  h("button", {
+                    class: "btn btn--primary btn--sm",
+                    style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                    onclick: () => openConfigMapModal(r, clusterId, namespace),
+                  }, "Preview Keys"),
+                  h("button", {
+                    class: "btn btn--secondary btn--sm",
+                    style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                    onclick: () => openManifestModal("ConfigMap", r.name, namespace),
+                  }, "YAML"),
+                ]),
+            },
           ],
-          data.configmaps
+          data.configmaps,
+          { emptyTitle: "No ConfigMaps in this namespace" }
         ),
     },
     {
@@ -753,8 +1059,20 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
             { key: "name", label: "Name", mono: true, truncate: true },
             { key: "type", label: "Type", mono: true },
             { key: "key_count", label: "Keys" },
+            { label: "Key Names", mono: true, truncate: true, render: (r) => (r.keys || []).join(", ") || "—" },
             { label: "Age", render: (r) => timeAgo(r.created_at) },
-            { label: "", render: (r) => revealButton(() => openSecretModal(r, clusterId, namespace)) },
+            {
+              label: "Actions",
+              render: (r) =>
+                h("div", { style: "display:flex;gap:6px;align-items:center;" }, [
+                  canOperate() ? revealButton(() => openSecretModal(r, clusterId, namespace)) : null,
+                  h("button", {
+                    class: "btn btn--secondary btn--sm",
+                    style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                    onclick: () => openManifestModal("Secret", r.name, namespace),
+                  }, "YAML"),
+                ].filter(Boolean)),
+            },
           ],
           data.secrets,
           { emptyTitle: "No secrets in this namespace" }
@@ -763,7 +1081,7 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
     {
       key: "gateways",
       label: "Gateways",
-      count: data.gateways.available ? data.gateways.items.length : null,
+      count: data.gateways.available ? data.gateways.items.length : 0,
       render: () =>
         data.gateways.available
           ? dataTable(
@@ -772,6 +1090,15 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
                 { key: "gateway_class", label: "Class" },
                 { label: "Addresses", render: (r) => (r.addresses || []).join(", ") || "—" },
                 { label: "Listeners", render: (r) => String((r.listeners || []).length) },
+                {
+                  label: "Actions",
+                  render: (r) =>
+                    h("button", {
+                      class: "btn btn--secondary btn--sm",
+                      style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                      onclick: () => openManifestModal("Gateway", r.name, namespace),
+                    }, "YAML"),
+                },
               ],
               data.gateways.items
             )
@@ -780,7 +1107,7 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
     {
       key: "httproutes",
       label: "HTTPRoutes",
-      count: data.httproutes.available ? data.httproutes.items.length : null,
+      count: data.httproutes.available ? data.httproutes.items.length : 0,
       render: () =>
         data.httproutes.available
           ? dataTable(
@@ -789,6 +1116,15 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
                 { label: "Hostnames", render: (r) => (r.hostnames || []).join(", ") || "—" },
                 { label: "Parents", render: (r) => (r.parent_refs || []).join(", ") || "—" },
                 { label: "Rules", render: (r) => String((r.rules || []).length) },
+                {
+                  label: "Actions",
+                  render: (r) =>
+                    h("button", {
+                      class: "btn btn--secondary btn--sm",
+                      style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                      onclick: () => openManifestModal("HTTPRoute", r.name, namespace),
+                    }, "YAML"),
+                },
               ],
               data.httproutes.items
             )
@@ -802,12 +1138,24 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
         dataTable(
           [
             { key: "name", label: "Name", mono: true, truncate: true },
-            { label: "Status", render: (r) => statusPill(r.status) },
-            { key: "capacity", label: "Capacity" },
+            { label: "Status", render: (r) => statusPill(r.status, r.status === "Bound") },
+            { key: "capacity", label: "Capacity", mono: true },
+            { key: "volume_name", label: "Bound PV", mono: true, truncate: true },
             { key: "storage_class", label: "StorageClass", mono: true, truncate: true },
             { label: "Access", render: (r) => (r.access_modes || []).join(", ") || "—" },
+            { label: "Age", render: (r) => timeAgo(r.created_at) },
+            {
+              label: "Actions",
+              render: (r) =>
+                h("button", {
+                  class: "btn btn--secondary btn--sm",
+                  style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                  onclick: () => openManifestModal("PersistentVolumeClaim", r.name, namespace),
+                }, "YAML"),
+            },
           ],
-          data.pvcs
+          data.pvcs,
+          { emptyTitle: "No PersistentVolumeClaims in this namespace" }
         ),
     },
     {
@@ -823,6 +1171,16 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
               label: "Workload Identity",
               render: (r) => (Object.keys(r.workload_identity_annotations || {}).length ? pill("configured", "healthy") : pill("none", "unknown")),
             },
+            { label: "Age", render: (r) => timeAgo(r.created_at) },
+            {
+              label: "Actions",
+              render: (r) =>
+                h("button", {
+                  class: "btn btn--secondary btn--sm",
+                  style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
+                  onclick: () => openManifestModal("ServiceAccount", r.name, namespace),
+                }, "YAML"),
+            },
           ],
           data.serviceaccounts
         ),
@@ -830,25 +1188,30 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
   ];
 
   const tabsRow = h("div", { class: "subtabs", role: "tablist" });
-  const panelBody = h("div", {});
+  const contentArea = h("div", {});
 
   const showSection = (key) => {
     const section = sections.find((s) => s.key === key);
     tabsRow.querySelectorAll(".subtabs__item").forEach((btn) => btn.setAttribute("aria-selected", String(btn.dataset.key === key)));
-    renderInto(panelBody, section.render());
+    if (section.isCards) {
+      renderInto(contentArea, section.render());
+      triggerGaugeAnimations(contentArea);
+    } else {
+      renderInto(contentArea, panel(null, section.render()));
+    }
   };
 
   for (const section of sections) {
     const btn = h(
       "button",
       { class: "subtabs__item", role: "tab", "data-key": section.key, "aria-selected": "false", onClick: () => showSection(section.key) },
-      [section.label, h("span", { class: "subtabs__count" }, section.count === null ? "—" : String(section.count))]
+      [section.label, h("span", { class: "subtabs__count" }, section.count === null ? "0" : String(section.count))]
     );
     tabsRow.appendChild(btn);
   }
 
   showSection(sections[0].key);
-  renderInto($("namespace-content"), h("div", {}, [tabsRow, panel(null, panelBody)]));
+  renderInto($("namespace-content"), h("div", {}, [tabsRow, contentArea]));
 }
 
 async function loadNamespaces() {
@@ -1049,24 +1412,97 @@ async function loadNamespaceMap() {
 
 // -- view: events -----------------------------------------------------------
 
+let eventsFilterState = "all";
+let eventsSearchQuery = "";
+
 function renderEvents(data) {
+  const items = data.items || [];
+  const warningCount = items.filter((e) => (e.type || "").toLowerCase() === "warning").length;
+  const normalCount = items.length - warningCount;
+
+  const stats = statGrid([
+    statCard("Total Events", items.length, null, STAT_ICONS.pulse),
+    statCard("Warnings", warningCount, warningCount ? [pill("Needs attention", "critical")] : [pill("None", "healthy")], STAT_ICONS.funnel),
+    statCard("Normal Events", normalCount, null, STAT_ICONS.checkCircle),
+  ]);
+
+  const filterBar = h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;" }, [
+    h("div", { class: "subtabs", role: "tablist", style: "margin:0;" }, [
+      ["all", "All", items.length],
+      ["warning", "Warnings", warningCount],
+      ["normal", "Normal", normalCount],
+    ].map(([key, label, count]) =>
+      h("button", {
+        class: "subtabs__item",
+        role: "tab",
+        "aria-selected": String(eventsFilterState === key),
+        onClick: () => {
+          eventsFilterState = key;
+          renderEvents(data);
+        },
+      }, [label, h("span", { class: "subtabs__count" }, String(count))])
+    )),
+    h("input", {
+      type: "text",
+      class: "input",
+      placeholder: "Filter by reason, object, or message...",
+      value: eventsSearchQuery,
+      style: "width:260px;",
+      onInput: (e) => {
+        eventsSearchQuery = e.target.value;
+        renderEvents(data);
+      },
+    }),
+  ]);
+
+  const q = eventsSearchQuery.toLowerCase().trim();
+  const filtered = items.filter((e) => {
+    const isWarn = (e.type || "").toLowerCase() === "warning";
+    if (eventsFilterState === "warning" && !isWarn) return false;
+    if (eventsFilterState === "normal" && isWarn) return false;
+    if (!q) return true;
+    const hay = `${e.reason || ""} ${e.involved_kind || ""}/${e.involved_name || ""} ${e.message || ""} ${e.namespace || ""}`.toLowerCase();
+    return hay.includes(q);
+  });
+
   renderInto(
     $("events-content"),
-    panel(
-      "Recent Events",
-      dataTable(
-        [
-          { label: "Type", render: (r) => pill(r.type || "Unknown", r.type === "Warning" ? "critical" : "healthy") },
-          { key: "reason", label: "Reason", mono: true },
-          { label: "Object", render: (r) => `${r.involved_kind || ""}/${r.involved_name || ""}` },
-          { key: "message", label: "Message" },
-          { key: "count", label: "Count" },
-          { label: "Last Seen", render: (r) => timeAgo(r.last_timestamp) },
-        ],
-        data.items,
-        { emptyTitle: "No events" }
-      )
-    )
+    h("div", {}, [
+      stats,
+      panel(
+        "Cluster Event Stream",
+        dataTable(
+          [
+            { label: "Type", render: (r) => pill(r.type || "Normal", r.type === "Warning" ? "critical" : "healthy") },
+            { key: "reason", label: "Reason", mono: true },
+            {
+              label: "Object",
+              mono: true,
+              render: (r) => {
+                const objLabel = `${r.involved_kind || "Object"}/${r.involved_name || ""}`;
+                if (r.involved_kind && r.involved_name) {
+                  return h("button", {
+                    type: "button",
+                    class: "btn--unstyled",
+                    style: "color:var(--accent);font-family:var(--font-mono);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;",
+                    title: "Inspect YAML manifest",
+                    onclick: () => openManifestModal(r.involved_kind, r.involved_name, r.namespace || ""),
+                  }, objLabel);
+                }
+                return objLabel;
+              },
+            },
+            { key: "namespace", label: "Namespace", mono: true },
+            { key: "message", label: "Message" },
+            { key: "count", label: "Count" },
+            { label: "Last Seen", render: (r) => timeAgo(r.last_timestamp) },
+          ],
+          filtered,
+          { emptyTitle: "No matching events" }
+        ),
+        filterBar
+      ),
+    ])
   );
 }
 
@@ -1160,26 +1596,9 @@ let catalogTypeFilter = null; // null = no type currently expanded on Overview
 // created_at only) -- this row is intentionally leaner to match what's
 // actually available here, not a straight copy of the old one.
 function podRows(items) {
-  return items.map((pod) => {
-    const isRunning = pod.status === "Running";
-    return h("div", { className: "pod-card-row card", style: "display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;box-shadow:var(--shadow-raised-sm);" }, [
-      h("div", { style: "display:flex;align-items:center;gap:0.75rem;" }, [
-        h("span", { style: `width:10px;height:10px;border-radius:50%;display:inline-block;background:${isRunning ? "var(--success)" : "var(--danger)"};` }),
-        h("span", { style: "font-weight:700;font-family:var(--font-mono, monospace);font-size:0.95rem;color:var(--fg);" }, pod.name),
-        h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, pod.namespace),
-      ]),
-      h("div", { style: "display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;" }, [
-        pill(pod.reason || pod.status || "Unknown", isRunning ? "success" : "warning"),
-        pill(pod.ready || "0/0", "info"),
-        pod.restarts ? pill(`↺ ${pod.restarts}`, "muted") : null,
-        pod.node ? h("span", { className: "badge", style: "font-size:0.75rem;background:var(--info-soft);color:var(--info);" }, pod.node) : null,
-        h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, timeAgo(pod.created_at)),
-        h("button", { className: "btn btn--primary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openPodInspectorModal(pod.name, pod.namespace) }, "Inspect"),
-        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;color:var(--info);border-color:color-mix(in srgb, var(--info) 40%, transparent);", onclick: () => openLogsModal(pod.name, pod.namespace) }, "Logs"),
-        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openManifestModal("Pod", pod.name, pod.namespace) }, "YAML"),
-      ].filter(Boolean))
-    ]);
-  });
+  return [
+    h("div", { class: "cmap-grid" }, items.map((pod) => renderNamespacePodCard(pod, pod.namespace))),
+  ];
 }
 
 function deploymentRows(items) {
@@ -1309,6 +1728,9 @@ function renderCatalogPanelBody() {
     bodyEl,
     items.length ? h("div", {}, type.rowFn(items)) : emptyState("No workloads found", `No matching ${type.label.toLowerCase()} in this namespace.`)
   );
+  if (type.key === "pods") {
+    triggerGaugeAnimations(bodyEl);
+  }
 }
 
 // Click handler for an Overview stat card (Deployments/StatefulSets/
@@ -1382,51 +1804,85 @@ function renderNodes(nodes = []) {
   const cards = nodes.map((node) => {
     const isReady = node.status === "Ready";
     const roles = (node.roles && node.roles.length) ? node.roles : ["worker"];
+    const conds = node.conditions || {};
+    const pressureList = ["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"];
 
     return h("div", {
       className: "node-card card",
-      style: "display:flex;flex-direction:column;gap:0.75rem;padding:1.1rem 1.25rem;background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;margin-bottom:0.75rem;box-shadow:var(--shadow-raised-sm);"
+      style: "display:flex;flex-direction:column;gap:0.85rem;padding:1.15rem 1.3rem;background:var(--grad-surface);border:1px solid var(--border);border-radius:14px;margin-bottom:0.85rem;box-shadow:var(--shadow-raised-md);"
     }, [
       h("div", { style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;" }, [
-        h("div", { style: "display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;" }, [
+        h("div", { style: "display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap;" }, [
           h("span", {
-            style: `width:10px;height:10px;border-radius:50%;display:inline-block;background:${isReady ? "var(--success)" : "var(--danger)"};`
+            class: `cmap-status-dot ${isReady ? "cmap-status-dot--ok" : "cmap-status-dot--bad"}`
           }),
-          h("span", { style: "font-weight:700;font-family:var(--font-mono, monospace);font-size:1.05rem;color:var(--fg);" }, node.name),
+          h("span", { style: "font-weight:700;font-family:var(--font-mono, monospace);font-size:1.02rem;color:var(--fg);" }, node.name),
           statusPill(node.status, isReady),
-          ...roles.map((r) => h("span", { className: "badge", style: "font-size:0.75rem;background:var(--accent-soft);color:var(--accent);font-weight:600;text-transform:uppercase;padding:2px 8px;border-radius:99px;" }, r)),
-        ]),
+          ...roles.map((r) => h("span", { className: "badge", style: "font-size:0.72rem;background:var(--accent-soft);color:var(--accent);font-weight:700;text-transform:uppercase;padding:2px 8px;border-radius:99px;" }, r)),
+          node.instance_type ? h("span", { class: "cmap-chip" }, node.instance_type) : null,
+          node.node_pool ? h("span", { class: "cmap-chip" }, `pool: ${node.node_pool}`) : null,
+          node.zone ? h("span", { class: "cmap-chip" }, node.zone) : null,
+        ].filter(Boolean)),
         h("div", { style: "display:flex;align-items:center;gap:0.5rem;" }, [
           h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, node.age || (node.created_at ? timeAgo(node.created_at) : "—")),
           h("button", {
             className: "btn btn--secondary btn--sm",
-            style: "padding:0.25rem 0.65rem;font-size:0.78rem;font-weight:600;",
+            style: "padding:0.25rem 0.65rem;font-size:0.76rem;font-weight:600;",
+            onclick: () => switchView("map")
+          }, "Cluster Map"),
+          h("button", {
+            className: "btn btn--secondary btn--sm",
+            style: "padding:0.25rem 0.65rem;font-size:0.76rem;font-weight:600;",
             onclick: () => openManifestModal("Node", node.name, "")
           }, "YAML"),
         ])
       ]),
-      h("div", { style: "display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:0.75rem;padding-top:0.6rem;border-top:1px solid var(--border);font-size:0.82rem;" }, [
+
+      // Node specs grid
+      h("div", { style: "display:grid;grid-template-columns:repeat(auto-fit, minmax(135px, 1fr));gap:0.75rem;padding-top:0.65rem;border-top:1px solid var(--border);font-size:0.82rem;" }, [
         h("div", {}, [
           h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "K8s Version"),
           h("div", { style: "font-family:var(--font-mono);font-weight:600;color:var(--fg);" }, node.kubernetes_version || "—")
         ]),
         h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "CPU Capacity"),
-          h("div", { style: "font-weight:600;color:var(--fg);" }, node.cpu_capacity ? `${node.cpu_capacity} cores` : "—")
+          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "CPU / Memory / Pods"),
+          h("div", { style: "font-weight:600;color:var(--fg);font-family:var(--font-mono);" }, `${node.cpu_capacity || "—"} vCPU \u00b7 ${formatMemory(node.memory_capacity)} \u00b7 ${node.pods_capacity || 110} pods`)
         ]),
         h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "Memory"),
-          h("div", { style: "font-weight:600;color:var(--fg);" }, formatMemory(node.memory_capacity))
+          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "Internal / External IP"),
+          h("div", { style: "font-family:var(--font-mono);font-weight:600;color:var(--fg);font-size:0.78rem;" }, `${node.internal_ip || "—"} / ${node.external_ip || "none"}`)
         ]),
-        h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "OS Image"),
-          h("div", { style: "font-weight:500;color:var(--fg-muted);font-size:0.78rem;word-break:break-word;" }, node.os_image || "—")
-        ]),
-        node.zone ? h("div", {}, [
-          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "Zone"),
-          h("div", { style: "font-weight:600;color:var(--fg);" }, node.zone)
+        node.container_runtime ? h("div", {}, [
+          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "Container Runtime"),
+          h("div", { style: "font-family:var(--font-mono);font-weight:600;color:var(--fg);font-size:0.78rem;" }, node.container_runtime)
         ]) : null,
-      ].filter(Boolean))
+        h("div", {}, [
+          h("div", { style: "font-size:0.68rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;margin-bottom:2px;" }, "OS / Kernel"),
+          h("div", { style: "font-weight:500;color:var(--fg-muted);font-size:0.76rem;word-break:break-word;" }, `${node.os_image || "—"}${node.kernel_version ? ` (${node.kernel_version})` : ""}`)
+        ]),
+      ].filter(Boolean)),
+
+      // Node Health Conditions & Taints bar (KubeLens / Headlamp style)
+      h("div", { style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-top:0.55rem;border-top:1px solid var(--border);font-size:0.74rem;" }, [
+        h("div", { style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap;" }, [
+          h("span", { style: "font-weight:700;color:var(--fg-subtle);text-transform:uppercase;font-size:0.66rem;letter-spacing:0.04em;" }, "Conditions:"),
+          ...pressureList.map((cName) => {
+            const hasPressure = conds[cName] === true;
+            return h("span", {
+              class: "cmap-chip",
+              style: hasPressure
+                ? "background:var(--danger-soft);color:var(--danger);font-weight:700;"
+                : "background:var(--bg-inset);color:var(--success);font-weight:600;",
+            }, `${hasPressure ? "\u26a0 " : "\u2713 "}${cName}: ${hasPressure ? "True" : "OK"}`);
+          }),
+        ]),
+        node.taints && node.taints.length
+          ? h("div", { style: "display:flex;align-items:center;gap:4px;flex-wrap:wrap;" }, [
+              h("span", { style: "font-weight:700;color:var(--fg-subtle);text-transform:uppercase;font-size:0.66rem;" }, "Taints:"),
+              ...node.taints.map((t) => h("span", { class: "cmap-chip", style: "font-family:var(--font-mono);" }, t)),
+            ])
+          : h("span", { style: "color:var(--fg-subtle);font-size:0.72rem;" }, "No taints (schedulable)"),
+      ]),
     ]);
   });
 
@@ -1691,10 +2147,7 @@ async function loadClustersView() {
   }
 
   $("clusters-page-add-btn")?.addEventListener("click", () => {
-    const onboardModal = $("onboard-modal");
-    if (onboardModal && typeof onboardModal.showModal === "function") {
-      onboardModal.showModal();
-    }
+    openClusterModal(null);
   });
 
   const totalCount = clusters.length;
@@ -1793,9 +2246,30 @@ async function loadClustersView() {
                 }
               }, "Connect"),
 
-          // Delete action container
+          // Edit + Delete action container (Admin only)
           (() => {
             const deleteContainer = h("div", { style: "display:flex;align-items:center;gap:6px;" });
+            if (!canAdmin()) {
+              return deleteContainer;
+            }
+
+            const editBtn = h("button", {
+              type: "button",
+              title: `Edit cluster '${c.name}'`,
+              style: "padding:5px 10px;height:34px;border-radius:8px;border:1.5px solid var(--border);background:transparent;color:var(--fg-muted);cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-size:0.76rem;font-weight:600;font-family:inherit;transition:all 150ms;",
+              onmouseenter: (e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.borderColor = "var(--accent)"; },
+              onmouseleave: (e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--fg-muted)"; e.currentTarget.style.borderColor = "var(--border)"; },
+              onClick: (e) => {
+                e.stopPropagation();
+                openClusterModal(c);
+              }
+            }, [
+              h("svg", { width: "14", height: "14", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" }, [
+                h("path", { d: "M12 20h9" }),
+                h("path", { d: "M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" })
+              ]),
+              "Edit"
+            ]);
 
             const trashBtn = h("button", {
               type: "button",
@@ -1834,6 +2308,7 @@ async function loadClustersView() {
                   onClick: (ev) => {
                     ev.stopPropagation();
                     deleteContainer.innerHTML = "";
+                    deleteContainer.appendChild(editBtn);
                     deleteContainer.appendChild(trashBtn);
                   }
                 }, "Cancel");
@@ -1847,6 +2322,7 @@ async function loadClustersView() {
               ])
             ]);
 
+            deleteContainer.appendChild(editBtn);
             deleteContainer.appendChild(trashBtn);
             return deleteContainer;
           })()
@@ -1889,56 +2365,132 @@ function renderLogicalApplications(data) {
     return;
   }
 
-  // Small cards in a wrapping grid, not one full-width row per app -- a
-  // namespace with a dozen small apps used to mean a dozen screens of mostly
-  // empty horizontal space to scroll through for a couple of chips each.
-  const MAX_CHIPS = 6;
+  const healthyCount = apps.filter((a) => a.healthy !== false).length;
+  const degradedCount = apps.length - healthyCount;
+  const totalServices = apps.reduce((s, a) => s + ((a.services || []).length), 0);
+  const totalAppPods = apps.reduce((s, a) => s + ((a.pods || []).length), 0);
+
+  const stats = statGrid([
+    statCard("Logical Applications", apps.length, null, STAT_ICONS.grid),
+    statCard("Healthy Stacks", healthyCount, degradedCount ? [pill(`${degradedCount} degraded`, "critical")] : [pill("All healthy", "healthy")], STAT_ICONS.checkCircle),
+    statCard("Bound Services", totalServices, null, STAT_ICONS.layers),
+    statCard("Application Pods", totalAppPods, null, kindIcon("pod")),
+  ]);
+
+  const MAX_CHIPS = 8;
 
   const appCards = apps.map((app) => {
     const isHealthy = app.healthy !== false;
     const statusColor = isHealthy ? "var(--success)" : "var(--danger)";
     const totalPods = (app.pods || []).length;
-    const readyPods = (app.pods || []).filter(p => p.status === "Running" || p.ready === p.total_containers).length;
+    const readyPods = (app.pods || []).filter(p => p.status === "Running" || p.status === "Succeeded").length;
+    const firstPod = (app.pods || [])[0];
 
     const chips = [
-      ...(app.deployments || []).map(d => ({ label: d.name || d, prefix: "deploy", color: "var(--accent)" })),
-      ...(app.statefulsets || []).map(s => ({ label: s.name || s, prefix: "sts", color: "#8b5cf6" })),
-      ...(app.daemonsets || []).map(ds => ({ label: ds.name || ds, prefix: "ds", color: "var(--warning)" })),
-      ...(app.services || []).map(svc => ({ label: svc.name || svc, prefix: "svc", color: "var(--success)" })),
+      ...(app.deployments || []).map(d => ({
+        label: d.name || d,
+        prefix: "deploy",
+        color: "var(--accent)",
+        onClick: () => openManifestModal("Deployment", d.name || d, app.namespace),
+      })),
+      ...(app.statefulsets || []).map(s => ({
+        label: s.name || s,
+        prefix: "sts",
+        color: "#8b5cf6",
+        onClick: () => openManifestModal("StatefulSet", s.name || s, app.namespace),
+      })),
+      ...(app.daemonsets || []).map(ds => ({
+        label: ds.name || ds,
+        prefix: "ds",
+        color: "var(--warning)",
+        onClick: () => openManifestModal("DaemonSet", ds.name || ds, app.namespace),
+      })),
+      ...(app.services || []).map(svc => {
+        const ports = (svc.ports || []).map(p => `${p.port}/${p.protocol || "TCP"}`).join(",");
+        return {
+          label: `${svc.name || svc}${ports ? ` (${ports})` : ""}`,
+          prefix: "svc",
+          color: "var(--success)",
+          onClick: () => openManifestModal("Service", svc.name || svc, app.namespace),
+        };
+      }),
     ];
     const visibleChips = chips.slice(0, MAX_CHIPS);
     const hiddenCount = chips.length - visibleChips.length;
 
-    return h("div", { className: "app-card app-card--sm" }, [
-      h("div", { style: "display:flex;align-items:center;gap:8px;" }, [
-        h("div", { style: `width:26px;height:26px;border-radius:7px;background:${statusColor}18;color:${statusColor};display:flex;align-items:center;justify-content:center;flex-shrink:0;` }, [
-          h("svg", { width: "13", height: "13", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.2" }, [
-            h("path", { d: "M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" })
-          ])
+    return h("div", { className: "app-card app-card--sm", style: "justify-content:space-between;" }, [
+      h("div", { style: "display:flex;flex-direction:column;gap:0.6rem;" }, [
+        h("div", { style: "display:flex;align-items:center;gap:8px;" }, [
+          h("div", { style: `width:30px;height:30px;border-radius:8px;background:${statusColor}18;color:${statusColor};display:flex;align-items:center;justify-content:center;flex-shrink:0;` }, [
+            h("svg", { width: "15", height: "15", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.2" }, [
+              h("path", { d: "M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" })
+            ])
+          ]),
+          h("div", { style: "min-width:0;flex:1;" }, [
+            h("div", { style: "font-weight:700;font-size:0.92rem;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, app.name),
+            h("div", { style: "font-size:0.72rem;color:var(--fg-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, `ns: ${app.namespace}`)
+          ]),
+          statusPill(isHealthy ? "Healthy" : "Degraded", isHealthy),
         ]),
-        h("div", { style: "min-width:0;flex:1;" }, [
-          h("div", { style: "font-weight:700;font-size:0.88rem;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, app.name),
-          h("div", { style: "font-size:0.7rem;color:var(--fg-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, app.namespace)
+
+        h("div", { style: "display:flex;align-items:center;justify-content:space-between;font-size:0.75rem;color:var(--fg-muted);font-weight:600;" }, [
+          h("span", {}, `${readyPods}/${totalPods} pods ready`),
+          h("span", { style: "color:var(--fg-subtle);" }, `${(app.services || []).length} svc`),
         ]),
-        h("span", {
-          style: `width:7px;height:7px;border-radius:50%;background:${statusColor};flex-shrink:0;`,
-          title: isHealthy ? "Healthy" : "Degraded",
-        }),
+
+        h("div", { style: "display:flex;flex-wrap:wrap;gap:4px;" }, [
+          ...visibleChips.map((c) => h("button", {
+            type: "button",
+            className: "app-child-pill app-child-pill--sm",
+            style: "cursor:pointer;",
+            title: "Click to view YAML manifest",
+            onclick: c.onClick,
+          }, [
+            h("span", { style: `color:${c.color};font-weight:700;` }, `${c.prefix}:`),
+            h("span", {}, c.label)
+          ])),
+          hiddenCount > 0 ? h("span", { className: "app-child-pill app-child-pill--sm", style: "color:var(--fg-subtle);" }, `+${hiddenCount} more`) : null,
+        ].filter(Boolean)),
       ]),
 
-      h("div", { style: "font-size:0.72rem;color:var(--fg-muted);font-weight:600;" }, `${readyPods}/${totalPods} pods ready`),
-
-      h("div", { style: "display:flex;flex-wrap:wrap;gap:4px;" }, [
-        ...visibleChips.map((c) => h("span", { className: "app-child-pill app-child-pill--sm" }, [
-          h("span", { style: `color:${c.color};font-weight:700;` }, `${c.prefix}:`),
-          h("span", {}, c.label)
-        ])),
-        hiddenCount > 0 ? h("span", { className: "app-child-pill app-child-pill--sm", style: "color:var(--fg-subtle);" }, `+${hiddenCount} more`) : null,
-      ].filter(Boolean))
+      // Quick navigation actions row
+      h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:6px;padding-top:8px;border-top:1px solid var(--border);margin-top:4px;" }, [
+        h("button", {
+          type: "button",
+          className: "btn btn--secondary btn--sm",
+          style: "padding:0.2rem 0.55rem;font-size:0.73rem;font-weight:600;",
+          onclick: () => {
+            const nsSelect = $("namespace-select");
+            if (nsSelect && app.namespace) nsSelect.value = app.namespace;
+            switchView("namespaces");
+          },
+        }, "Namespace \u2192"),
+        h("div", { style: "display:flex;gap:5px;" }, [
+          firstPod ? h("button", {
+            type: "button",
+            className: "btn btn--secondary btn--sm",
+            style: "padding:0.2rem 0.55rem;font-size:0.73rem;font-weight:600;",
+            onclick: () => openLogsModal(firstPod.name, app.namespace),
+          }, "Logs") : null,
+          h("button", {
+            type: "button",
+            className: "btn btn--secondary btn--sm",
+            style: "padding:0.2rem 0.55rem;font-size:0.73rem;font-weight:600;",
+            onclick: () => {
+              const rmNs = $("resourcemap-namespace-select");
+              if (rmNs && app.namespace) rmNs.value = app.namespace;
+              switchView("resourcemap");
+            },
+          }, "Topology"),
+        ].filter(Boolean)),
+      ]),
     ]);
   });
 
-  renderInto(container, h("div", { className: "app-card-grid" }, appCards));
+  renderInto(container, h("div", {}, [
+    stats,
+    h("div", { className: "app-card-grid", style: "grid-template-columns:repeat(auto-fill, minmax(300px, 1fr));gap:14px;" }, appCards),
+  ]));
 }
 
 // -- view: autonomous diagnostics & RCA --------------------------------------
@@ -1957,31 +2509,486 @@ async function loadDiagnosticsRCA() {
   }
 }
 
+let selectedPipelineStageId = null;
+let _kmAnimTimer = null;
+
+function buildKubectlMachineInfographic(data) {
+  if (_kmAnimTimer) {
+    clearInterval(_kmAnimTimer);
+    _kmAnimTimer = null;
+  }
+
+  const summary = data.summary || { overall_score: 100, active_root_causes: 0, workloads_healthy: 0, workloads_total: 0 };
+  const allRootCauses = data.root_causes || [];
+  const activeCauses = allRootCauses.filter((r) => r.kind === "active_failure");
+
+  // Map active failures to specific step buckets (9, 10a, 10b, 10c, 10d, 11, 12, 8)
+  const countByTag = (substr) =>
+    activeCauses.filter((r) => (r.step_badge || "").toLowerCase().includes(substr.toLowerCase()));
+
+  const step8Stalls = countByTag("step 8");
+  const step9Stalls = countByTag("step 9");
+  const step10aStalls = countByTag("10a");
+  const step10bStalls = countByTag("10b");
+  const step10cStalls = countByTag("10c");
+  const step10dStalls = countByTag("10d");
+  const step10AllStalls = activeCauses.filter((r) => r.stage_id === "step-10");
+  const step11Stalls = countByTag("step 11");
+  const step12Stalls = countByTag("step 12");
+
+  const clusterName = state.clusterBadge?.name || state.selectedClusterId || "active-cluster";
+  const providerName = (state.clusterBadge?.provider || "k8s").toUpperCase();
+
+  // Generate 52 golden-angle points for the etcd cluster-state particle sphere at (200, 145)
+  const etcdDots = [];
+  for (let i = 0; i < 52; i++) {
+    const r = 46 * Math.sqrt((i + 0.5) / 52);
+    const theta = i * 2.39996323;
+    const dx = (200 + r * Math.cos(theta)).toFixed(1);
+    const dy = (145 + r * Math.sin(theta)).toFixed(1);
+    const dotR = (i % 5 === 0 ? 1.9 : 1.3);
+    const op = (0.45 + 0.5 * (1 - r / 50)).toFixed(2);
+    etcdDots.push(`<circle cx="${dx}" cy="${dy}" r="${dotR}" fill="#9fb0c7" opacity="${op}"/>`);
+  }
+
+  // 12 canonical animated paths & step definitions
+  const stepMeta = [
+    { num: 1, stageId: "steps-1-6", title: "kubectl apply", sub: "sends manifest to kube-apiserver", x: 540, y: 46, stalled: 0 },
+    { num: 2, stageId: "steps-1-6", title: "{authn}", sub: "who are you?", x: 612, y: 242, stalled: 0 },
+    { num: 3, stageId: "steps-1-6", title: "{rbac-authz}", sub: "are you allowed?", x: 672, y: 266, stalled: 0 },
+    { num: 4, stageId: "steps-1-6", title: "{mutating-admission}", sub: "defaults & injected fields", x: 684, y: 320, stalled: 0 },
+    { num: 5, stageId: "steps-1-6", title: "{schema-validation}", sub: "is it valid as written?", x: 632, y: 372, stalled: 0 },
+    { num: 6, stageId: "steps-1-6", title: "etcd · cluster state", sub: "the Deployment is stored", x: 224, y: 175, stalled: 0 },
+    { num: 7, stageId: "steps-7-8", title: "{deployment-controller}", sub: "creates a ReplicaSet", x: 74, y: 230, stalled: 0 },
+    { num: 8, stageId: "steps-7-8", title: "{replicaset-controller}", sub: "creates Pods (no node yet)", x: 62, y: 278, stalled: step8Stalls.length },
+    { num: 9, stageId: "step-9", title: "kube-scheduler", sub: "filter → score → bind (Pod gets node)", x: 878, y: 215, stalled: step9Stalls.length },
+    { num: 10, stageId: "step-10", title: "kubelet · worker node", sub: "CSI → CNI → image pull → containerd", x: 292, y: 506, stalled: step10AllStalls.length },
+    { num: 11, stageId: "step-11", title: "{readiness-probe}", sub: "Pod is Ready", x: 432, y: 546, stalled: step11Stalls.length },
+    { num: 12, stageId: "step-12", title: "{endpointslice-controller}", sub: "adds Pod IP → kube-proxy routes traffic", x: 66, y: 382, stalled: step12Stalls.length },
+  ];
+
+  // Bezier curves matching the exact radial flow of "The kubectl apply Machine" GIF
+  const stepPaths = [
+    { num: 1, stageId: "steps-1-6", d: "M 540 46 Q 558 175 540 310", stalled: false },
+    { num: 2, stageId: "steps-1-6", d: "M 540 310 Q 576 268 612 242", stalled: false },
+    { num: 3, stageId: "steps-1-6", d: "M 612 242 Q 646 250 672 266", stalled: false },
+    { num: 4, stageId: "steps-1-6", d: "M 672 266 Q 684 292 684 320", stalled: false },
+    { num: 5, stageId: "steps-1-6", d: "M 684 320 Q 664 352 632 372 L 540 310", stalled: false },
+    { num: 6, stageId: "steps-1-6", d: "M 540 310 Q 370 250 200 145", stalled: false },
+    { num: 7, stageId: "steps-7-8", d: "M 540 310 Q 320 262 74 230", stalled: false },
+    { num: 8, stageId: "steps-7-8", d: "M 540 310 Q 310 296 62 278", stalled: step8Stalls.length > 0 },
+    { num: 9, stageId: "step-9",    d: "M 540 310 Q 705 236 878 215", stalled: step9Stalls.length > 0 },
+    { num: 10, stageId: "step-10",  d: "M 540 310 Q 430 432 292 506", stalled: step10AllStalls.length > 0 },
+    { num: 11, stageId: "step-11",  d: "M 292 506 Q 362 536 432 546 Q 468 424 540 310", stalled: step11Stalls.length > 0 },
+    { num: 12, stageId: "step-12",  d: "M 540 310 Q 310 348 66 382 M 540 310 Q 685 430 788 552", stalled: step12Stalls.length > 0 },
+  ];
+
+  const narratorEl = h("div", { className: "km-narrator" }, [
+    h("div", { id: "km-narrator-text", style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap;" }, [
+      h("span", { style: "font-weight:800;color:#ff5630;font-family:var(--font-mono);" },
+        selectedPipelineStageId ? `FILTERED: ${selectedPipelineStageId.toUpperCase()}` : "LIVE 12-STEP CLUSTER TELEMETRY"),
+      h("span", { style: "color:#cbd5e1;" },
+        activeCauses.length
+          ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName} (${providerName}) — click any numbered step or stall card to filter root causes below.`
+          : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}.`)
+    ]),
+    h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:#94a3b8;white-space:nowrap;" },
+      `${summary.workloads_healthy}/${summary.workloads_total} Workloads Ready`)
+  ]);
+
+  const svgContainer = h("div", { className: "km-canvas-wrap" });
+
+  const edgesHtml = stepPaths.map((p) => {
+    const cls = p.stalled ? "is-stalled-edge" : "is-healthy-edge";
+    const selCls = selectedPipelineStageId === p.stageId ? " is-active-step" : "";
+    return `
+      <path id="km-glow-${p.num}" class="km-wire-glow ${cls}${selCls}" d="${p.d}" />
+      <path id="km-flow-${p.num}" class="km-wire-flow ${cls}${selCls}" d="${p.d}" />
+    `;
+  }).join("");
+
+  const stepBadgesHtml = stepMeta.map((s) => {
+    const hasStall = s.stalled > 0;
+    const badgeColor = hasStall ? "#ff3b1d" : "#10b981";
+    const pulseHtml = hasStall
+      ? `<circle cx="${s.x}" cy="${s.y}" r="12" class="km-pulse-circle" />`
+      : "";
+    return `
+      <g class="km-step-node" data-stage-id="${s.stageId}" data-step-num="${s.num}">
+        ${pulseHtml}
+        <circle cx="${s.x}" cy="${s.y}" r="11" fill="${badgeColor}" stroke="#ffffff" stroke-width="2" filter="url(#km-neon-glow)" />
+        <text x="${s.x}" y="${s.y + 3.8}" text-anchor="middle" fill="#ffffff" font-size="10.5" font-weight="800" font-family="monospace">${s.num}</text>
+      </g>
+    `;
+  }).join("");
+
+  svgContainer.innerHTML = `
+    <svg class="km-svg" viewBox="0 0 1080 615" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="km-neon-glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="3.5" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <radialGradient id="km-hub-grad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.28" />
+          <stop offset="65%" stop-color="#ff4d2a" stop-opacity="0.12" />
+          <stop offset="100%" stop-color="#090d16" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+
+      <!-- Subtle background structural web lines (satellites to kube-apiserver) -->
+      <g class="km-wire-bg">
+        <path d="M 540 46 Q 470 55 425 78" />
+        <path d="M 540 46 Q 610 55 660 78" />
+        <path d="M 405 128 Q 470 215 540 310" />
+        <path d="M 768 158 Q 650 235 540 310" />
+        <path d="M 940 112 Q 850 135 768 158" />
+        <path d="M 878 215 L 945 176 M 878 215 L 966 212 M 878 215 L 938 258" />
+        <path d="M 335 295 L 185 332 M 335 295 L 195 418 M 335 295 L 155 450" />
+        <path d="M 292 506 L 165 480 M 292 506 L 145 516 M 292 506 L 185 552 M 292 506 L 312 562 M 292 506 L 420 476 M 292 506 L 442 506" />
+        <path d="M 540 310 Q 740 350 935 370" />
+        <path d="M 540 310 Q 720 400 845 435" />
+        <path d="M 540 310 Q 600 410 635 455" />
+        <path d="M 540 310 Q 740 465 895 495" />
+        <path d="M 540 310 Q 700 495 855 530" />
+      </g>
+
+      <!-- Center Hub Ambient Glow -->
+      <circle cx="540" cy="310" r="105" fill="url(#km-hub-grad)" />
+
+      <!-- Active 12-Step Animated Neon Bezier Paths -->
+      <g id="km-active-paths">${edgesHtml}</g>
+
+      <!-- Step 6: etcd · cluster state particle sphere (Top-Left) -->
+      <g>
+        <circle cx="200" cy="145" r="50" fill="none" stroke="rgba(148,163,184,0.18)" stroke-dasharray="3 3" />
+        ${etcdDots.join("")}
+        <circle cx="148" cy="112" r="9" fill="#ff3b1d" stroke="#fff" stroke-width="1.5" />
+        <text x="148" y="115.5" text-anchor="middle" fill="#fff" font-size="9.5" font-weight="800" font-family="monospace">6</text>
+        <text x="200" y="214" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="800" font-family="monospace">etcd · cluster state</text>
+        <text x="200" y="230" text-anchor="middle" fill="#94a3b8" font-size="10.5" font-family="monospace">the Deployment is stored (${summary.workloads_total} workloads)</text>
+      </g>
+
+      <!-- Satellite context nodes (Argo CD, Helm, Prometheus, HPA, Karpenter, CoreDNS, etc.) -->
+      <g fill="#7e8fa6" font-size="10.5" font-family="monospace">
+        <text x="415" y="81" text-anchor="end">{~/.kube/config} ●</text>
+        <text x="666" y="81">● {server-side-apply}</text>
+        <text x="395" y="131">◈ Argo CD</text>
+        <text x="772" y="161">◈ Helm</text>
+        <text x="946" y="115">◈ Prometheus</text>
+
+        <!-- kube-scheduler satellites (Step 9) -->
+        <text x="952" y="179">● {filter}</text>
+        <text x="972" y="215">● {score}</text>
+        <text x="945" y="261">● {bind}</text>
+        <text x="878" y="245" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="800">kube-scheduler</text>
+        <text x="878" y="261" text-anchor="middle" fill="${step9Stalls.length ? "#ff5630" : "#94a3b8"}" font-size="10.5">
+          filter → score → bind ${step9Stalls.length ? `(${step9Stalls.length} Pending!)` : "(Pod gets a node)"}
+        </text>
+
+        <!-- kube-controller-manager & satellites (Mid-Left) -->
+        <circle cx="335" cy="295" r="9" fill="#0f172a" stroke="#64748b" stroke-width="2" />
+        <text x="335" y="317" text-anchor="middle" fill="#cbd5e1" font-size="12" font-weight="700">kube-controller-manager</text>
+        <text x="88" y="227" fill="#e2e8f0" font-weight="700">{deployment-controller}</text>
+        <text x="88" y="241" fill="#94a3b8">creates a ReplicaSet</text>
+        <text x="76" y="275" fill="#e2e8f0" font-weight="700">{replicaset-controller}</text>
+        <text x="76" y="289" fill="#94a3b8">creates Pods (no node yet)</text>
+        <text x="178" y="335" text-anchor="end">● {namespace-controller}</text>
+        <text x="458" y="352" text-anchor="end">{pod-security} ●</text>
+        <text x="458" y="365" text-anchor="end" fill="#64748b" font-size="9.5">enforced at step 8</text>
+        <text x="80" y="380" fill="#e2e8f0" font-weight="700">{endpointslice-controller}</text>
+        <text x="80" y="394" fill="${step12Stalls.length ? "#ff5630" : "#94a3b8"}">adds Pod IP → kube-proxy routes traffic</text>
+        <text x="80" y="407" fill="#64748b" font-size="9.5">(only if a Service selects the Pod)</text>
+        <text x="188" y="426" text-anchor="end">● {node-controller}</text>
+        <text x="148" y="453" text-anchor="end">● {job-controller}</text>
+
+        <!-- Step 1-5 labels around kube-apiserver -->
+        <text x="540" y="26" text-anchor="middle" fill="#ffffff" font-size="13.5" font-weight="800">kubectl</text>
+        <text x="552" y="132" fill="#94a3b8">sends the manifest to kube-apiserver</text>
+        <text x="626" y="238" fill="#e2e8f0" font-weight="700">{authn}</text>
+        <text x="626" y="251" fill="#94a3b8">who are you?</text>
+        <text x="688" y="264" fill="#e2e8f0" font-weight="700">{rbac-authz}</text>
+        <text x="688" y="277" fill="#94a3b8">are you allowed?</text>
+        <text x="700" y="317" fill="#e2e8f0" font-weight="700">{mutating-admission}</text>
+        <text x="700" y="330" fill="#94a3b8">defaults and injected fields</text>
+        <text x="646" y="369" fill="#e2e8f0" font-weight="700">{schema-validation}</text>
+        <text x="646" y="382" fill="#94a3b8">is it allowed as written?</text>
+        <text x="530" y="398" text-anchor="middle" fill="#cbd5e1">{validating-admission}</text>
+
+        <!-- Bottom-Left: kubelet · worker node (Step 10 & Step 11) -->
+        <text x="160" y="478" text-anchor="end" fill="${step10aStalls.length ? "#ff5630" : "#cbd5e1"}" font-weight="${step10aStalls.length ? "800" : "400"}">● {csi-mount}${step10aStalls.length ? " [!]" : ""}</text>
+        <text x="140" y="518" text-anchor="end" fill="${step10bStalls.length ? "#ff5630" : "#cbd5e1"}">● {cni-sandbox}</text>
+        <text x="180" y="555" text-anchor="end" fill="${step10cStalls.length ? "#ff5630" : "#cbd5e1"}" font-weight="${step10cStalls.length ? "800" : "400"}">● {image-pull}${step10cStalls.length ? " [!]" : ""}</text>
+        <text x="312" y="576" text-anchor="middle" fill="${step10dStalls.length ? "#ff5630" : "#cbd5e1"}" font-weight="${step10dStalls.length ? "800" : "400"}">● {containerd}${step10dStalls.length ? " [!]" : ""}</text>
+        <text x="425" y="476">● {init-containers}</text>
+        <text x="448" y="508">● {startup-probe}</text>
+        <text x="448" y="545" fill="${step11Stalls.length ? "#ff5630" : "#e2e8f0"}" font-weight="700">{readiness-probe}</text>
+        <text x="448" y="558" fill="${step11Stalls.length ? "#ff5630" : "#94a3b8"}">${step11Stalls.length ? "0/1 Ready (Probe Failing!)" : "Pod is Ready"}</text>
+
+        <text x="292" y="534" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="800">kubelet · worker node</text>
+        <text x="292" y="598" text-anchor="middle" fill="#94a3b8" font-size="10.5">mount volumes (CSI) → sandbox + network (CNI) → pull image → start containers</text>
+
+        <!-- Bottom-Right: Service, EndpointSlice, kube-proxy, HPA, Karpenter, CoreDNS -->
+        <text x="942" y="373">HPA ◈</text>
+        <text x="748" y="435">Karpenter / cluster-autoscaler ◈</text>
+        <text x="612" y="458">◈ cert-manager</text>
+        <text x="745" y="495" fill="${step12Stalls.length ? "#ff5630" : "#cbd5e1"}">● EndpointSlice</text>
+        <text x="898" y="495">CoreDNS ●</text>
+        <text x="845" y="528" fill="${step12Stalls.length ? "#ff5630" : "#cbd5e1"}">● Service</text>
+        <circle cx="788" cy="552" r="6" fill="${step12Stalls.length ? "#ff3b1d" : "#10b981"}" filter="url(#km-neon-glow)" />
+        <text x="802" y="556" fill="#e2e8f0" font-weight="700">kube-proxy (or eBPF CNI)</text>
+      </g>
+
+      <!-- CENTER HUB: kube-apiserver -->
+      <g>
+        <circle cx="540" cy="310" r="32" fill="#090d16" stroke="rgba(56,189,248,0.35)" stroke-width="1.5" />
+        <circle cx="540" cy="310" r="24" fill="#0d1526" stroke="#e2e8f0" stroke-width="2.2" filter="url(#km-neon-glow)" />
+        <text x="540" y="356" text-anchor="middle" fill="#ffffff" font-size="14.5" font-weight="800" font-family="monospace">kube-apiserver</text>
+      </g>
+
+      <!-- Numbered Step Badges (1..12) -->
+      ${stepBadgesHtml}
+    </svg>
+  `;
+
+  // Wire up interactive click on SVG step nodes
+  svgContainer.querySelectorAll(".km-step-node").forEach((nodeEl) => {
+    nodeEl.addEventListener("click", () => {
+      const stgId = nodeEl.getAttribute("data-stage-id");
+      selectedPipelineStageId = selectedPipelineStageId === stgId ? null : stgId;
+      renderDiagnosticsRCA(data);
+    });
+  });
+
+  // Animated 12-Step Sequencer ("▶ Replay 12-Step Flow")
+  const playBtn = h("button", {
+    type: "button",
+    className: "km-btn km-btn--primary",
+    onclick: () => {
+      if (_kmAnimTimer) {
+        clearInterval(_kmAnimTimer);
+        _kmAnimTimer = null;
+        playBtn.textContent = "▶ Replay 12-Step Flow";
+        svgContainer.querySelectorAll(".km-wire-flow, .km-wire-glow").forEach((el) => el.classList.remove("is-active-step"));
+        return;
+      }
+      let currentStep = 1;
+      playBtn.textContent = "⏹ Stop Animation";
+      const highlightStep = (stepNum) => {
+        svgContainer.querySelectorAll(".km-wire-flow, .km-wire-glow").forEach((el) => el.classList.remove("is-active-step"));
+        const flowEl = svgContainer.querySelector(`#km-flow-${stepNum}`);
+        const glowEl = svgContainer.querySelector(`#km-glow-${stepNum}`);
+        if (flowEl) flowEl.classList.add("is-active-step");
+        if (glowEl) glowEl.classList.add("is-active-step");
+        const meta = stepMeta.find((m) => m.num === stepNum);
+        const narText = $("km-narrator-text");
+        if (meta && narText) {
+          narText.innerHTML = `
+            <span style="font-weight:800;color:#fbbf24;font-family:var(--font-mono);">STEP ${meta.num} OF 12 · ${escapeHtml(meta.title.toUpperCase())}</span>
+            <span style="color:#f0f6fc;">${escapeHtml(meta.sub)}</span>
+            <span style="font-family:var(--font-mono);font-size:0.75rem;padding:2px 8px;border-radius:99px;background:${meta.stalled ? "rgba(255,59,29,0.2)" : "rgba(16,185,129,0.2)"};color:${meta.stalled ? "#ff5630" : "#34d399"};">
+              ${meta.stalled ? `⚠ ${meta.stalled} STALLED IN CLUSTER` : "✓ PASSING IN CLUSTER"}
+            </span>
+          `;
+        }
+      };
+      highlightStep(currentStep);
+      _kmAnimTimer = setInterval(() => {
+        currentStep++;
+        if (currentStep > 12) {
+          clearInterval(_kmAnimTimer);
+          _kmAnimTimer = null;
+          playBtn.textContent = "▶ Replay 12-Step Flow";
+          svgContainer.querySelectorAll(".km-wire-flow, .km-wire-glow").forEach((el) => el.classList.remove("is-active-step"));
+          return;
+        }
+        highlightStep(currentStep);
+      }, 1250);
+    }
+  }, "▶ Replay 12-Step Flow");
+
+  const resetFilterBtn = selectedPipelineStageId ? h("button", {
+    type: "button",
+    className: "km-btn",
+    onclick: () => {
+      selectedPipelineStageId = null;
+      renderDiagnosticsRCA(data);
+    }
+  }, "✕ Clear Stage Filter") : null;
+
+  // Bottom-Right "Where it stalls" items bound to live cluster counts
+  const stallCategories = [
+    {
+      icon: "◷",
+      label: "Pending",
+      stepText: "→ scheduler (step 9)",
+      stageId: "step-9",
+      matches: step9Stalls,
+    },
+    {
+      icon: "⬡",
+      label: "ContainerCreating",
+      stepText: "→ CSI / CNI (step 10a/b)",
+      stageId: "step-10",
+      matches: [...step10aStalls, ...step10bStalls],
+    },
+    {
+      icon: "↓",
+      label: "ImagePullBackOff",
+      stepText: "→ image pull (step 10c)",
+      stageId: "step-10",
+      matches: step10cStalls,
+    },
+    {
+      icon: "⚡",
+      label: "CrashLoop / OOMKilled",
+      stepText: "→ containerd (step 10d)",
+      stageId: "step-10",
+      matches: step10dStalls,
+    },
+    {
+      icon: "∿",
+      label: "0/1 Ready",
+      stepText: "→ readiness probe (step 11)",
+      stageId: "step-11",
+      matches: step11Stalls,
+    },
+    {
+      icon: "⊘",
+      label: "503 from Ingress / Service",
+      stepText: "→ no ready endpoints (step 12)",
+      stageId: "step-12",
+      matches: step12Stalls,
+    },
+  ];
+
+  const bottomGrid = h("div", { className: "km-bottom-grid" }, [
+    // Left Box: The machine in numbers
+    h("div", { className: "km-box" }, [
+      h("div", { className: "km-box__title" }, [
+        h("span", {}, "The machine in numbers"),
+        h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:#38bdf8;" }, clusterName)
+      ]),
+      h("div", { className: "km-num-hero" }, [
+        h("span", { className: "km-num-hero__big" }, "12"),
+        h("span", { className: "km-num-hero__label" }, "steps from kubectl to traffic")
+      ]),
+      h("div", { className: "km-num-row" }, [h("span", {}, "Components that talk to etcd"), h("strong", {}, "1 (kube-apiserver)")]),
+      h("div", { className: "km-num-row" }, [h("span", {}, "Controllers on the path"), h("strong", {}, "3 (Deploy → RS → EndpointSlice)")]),
+      h("div", { className: "km-num-row" }, [h("span", {}, "Checks before storage"), h("strong", {}, "4 (Authn, RBAC, Mutating, Validating)")]),
+      h("div", { className: "km-num-row" }, [h("span", {}, "Workloads Healthy / Total"), h("strong", { style: "color:#34d399;" }, `${summary.workloads_healthy} / ${summary.workloads_total}`)]),
+      h("div", { className: "km-num-row" }, [
+        h("span", {}, "Active Pipeline Stalls Detected"),
+        h("strong", { style: `color:${activeCauses.length ? "#ff5630" : "#34d399"};` }, `${activeCauses.length} active`)
+      ]),
+    ]),
+
+    // Right Box: Where it stalls (interactive live telemetry)
+    h("div", { className: "km-box" }, [
+      h("div", { className: "km-box__title" }, [
+        h("span", {}, "Where it stalls (Live Cluster Detection)"),
+        h("span", { style: "font-size:0.7rem;font-family:var(--font-mono);color:#94a3b8;" }, "Click any stall point to filter RCA cards")
+      ]),
+      h("div", { className: "km-stalls-grid" }, stallCategories.map((sc) => {
+        const count = sc.matches.length;
+        const isSel = selectedPipelineStageId === sc.stageId;
+        const sampleNames = sc.matches.flatMap((m) => m.folded_failures || []).slice(0, 2).join(", ");
+        return h("button", {
+          type: "button",
+          className: `km-stall-item ${count > 0 ? "has-stall" : ""} ${isSel ? "is-active" : ""}`,
+          onclick: () => {
+            selectedPipelineStageId = isSel ? null : sc.stageId;
+            renderDiagnosticsRCA(data);
+          }
+        }, [
+          h("div", { style: "display:flex;align-items:center;justify-content:space-between;width:100%;gap:6px;" }, [
+            h("span", { style: "font-size:0.8rem;font-weight:800;color:#ffffff;display:flex;align-items:center;gap:6px;" }, [
+              h("span", { style: `color:${count > 0 ? "#ff4d2a" : "#34d399"};` }, sc.icon),
+              sc.label
+            ]),
+            h("span", {
+              style: `font-size:0.68rem;font-weight:800;padding:1px 7px;border-radius:99px;background:${count > 0 ? "rgba(255,77,42,0.22)" : "rgba(16,185,129,0.14)"};color:${count > 0 ? "#ff6242" : "#34d399"};`
+            }, count > 0 ? `${count} stalled` : "0 stalled")
+          ]),
+          h("div", { style: "font-size:0.73rem;color:#9fb0c7;" }, sc.stepText),
+          count > 0 && sampleNames
+            ? h("div", { style: "font-size:0.68rem;color:#fca5a5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;" }, `↳ ${sampleNames}`)
+            : null,
+        ].filter(Boolean));
+      }))
+    ])
+  ]);
+
+  return h("div", { className: "km-shell" }, [
+    h("div", { className: "km-shell__header" }, [
+      h("div", {}, [
+        h("div", { className: "km-shell__tag" }, [
+          h("span", {}, "∞ KUBEORBIT 360°"),
+          h("span", { style: "opacity:0.6;" }, "·"),
+          h("span", {}, `LIVE ${providerName} CONTROL & DATA PLANE`)
+        ]),
+        h("h2", { className: "km-shell__title" }, [
+          "The ",
+          h("code", { style: "font-family:var(--font-mono);font-size:1.5rem;" }, "kubectl apply"),
+          " Machine",
+          h("span", {}, ".")
+        ]),
+        h("div", { className: "km-shell__subtitle" },
+          `Active Cluster: ${clusterName} · Click any numbered node (1–12) or stall card to inspect root causes`)
+      ]),
+      h("div", { className: "km-controls" }, [
+        resetFilterBtn,
+        playBtn,
+      ].filter(Boolean))
+    ]),
+    narratorEl,
+    svgContainer,
+    bottomGrid,
+    h("div", { className: "km-footer-caption" }, [
+      h("span", {}, "KUBEORBIT LIVE CLUSTER TELEMETRY · 12-STEP RUNBOOK ENGINE"),
+      h("span", {}, "NOTHING TALKS TO ANYTHING. EVERYTHING TALKS TO THE API SERVER.")
+    ])
+  ]);
+}
+
 function renderDiagnosticsRCA(data) {
   const container = $("diagnostics-content");
   const summary = data.summary || { overall_score: 100, active_root_causes: 0, workloads_healthy: 0, workloads_total: 0 };
-  const rootCauses = data.root_causes || [];
+  const allRootCauses = data.root_causes || [];
 
   const stats = statGrid([
     statCard("Cluster Health Score", `${summary.overall_score}%`, [pill(summary.overall_score >= 80 ? "Healthy" : "Anomalies Detected", summary.overall_score >= 80 ? "healthy" : "critical")], STAT_ICONS.pulse),
-    statCard("Folded Root Causes", summary.active_root_causes, [pill(`${rootCauses.reduce((acc, r) => acc + (r.folded_failures?.length || 1), 0)} Raw Symptoms Folded`, "info")], STAT_ICONS.funnel),
+    statCard("Folded Root Causes", summary.active_root_causes, [pill(`${allRootCauses.reduce((acc, r) => acc + (r.folded_failures?.length || 1), 0)} Raw Symptoms Folded`, "info")], STAT_ICONS.funnel),
     statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`, null, STAT_ICONS.shieldCheck),
   ]);
+
+  const machineInfographic = buildKubectlMachineInfographic(data);
+
+  const rootCauses = selectedPipelineStageId
+    ? allRootCauses.filter((r) => r.stage_id === selectedPipelineStageId)
+    : allRootCauses;
 
   if (!rootCauses.length) {
     const cleanState = h("div", {
       className: "card",
-      style: "padding:2.5rem;text-align:center;background:var(--bg-elevated);border:1.5px solid var(--success);border-radius:16px;margin-top:1.5rem;"
+      style: "padding:2.5rem;text-align:center;background:var(--bg-elevated);border:1.5px solid var(--success);border-radius:16px;margin-top:0.5rem;"
     }, [
       h("div", { style: "width:54px;height:54px;border-radius:50%;background:rgba(16,185,129,0.12);color:var(--success);display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem;" }, [
         h("svg", { width: "28", height: "28", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.5" }, [
           h("path", { d: "M20 6L9 17l-5-5" })
         ])
       ]),
-      h("h3", { style: "font-size:1.2rem;font-weight:700;color:var(--fg);margin:0 0 0.5rem;" }, "Zero Anomalies Detected"),
-      h("p", { style: "font-size:0.85rem;color:var(--fg-muted);max-width:480px;margin:0 auto;" }, "AI Diagnostic Engine continuously verified pod liveness, probe health, memory limits, and rollout skew. All cluster workloads are running within optimal thresholds.")
+      h("h3", { style: "font-size:1.2rem;font-weight:700;color:var(--fg);margin:0 0 0.5rem;" },
+        selectedPipelineStageId ? "Zero Anomalies at This Pipeline Stage" : "Zero Anomalies Detected"),
+      h("p", { style: "font-size:0.85rem;color:var(--fg-muted);max-width:480px;margin:0 auto;" },
+        selectedPipelineStageId
+          ? "No active stalls or advisories were detected at the selected pipeline stage."
+          : "AI Diagnostic Engine continuously verified all 12 pipeline steps across controllers, scheduler, kubelet CSI/CNI/runtime, readiness probes, and EndpointSlices.")
     ]);
-    renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, cleanState]));
+    renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, cleanState].filter(Boolean)));
     return;
   }
 
@@ -1991,13 +2998,19 @@ function renderDiagnosticsRCA(data) {
     return h("div", { className: `rca-card ${isCrit ? "rca-critical" : "rca-warning"}` }, [
       h("div", { style: "display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;" }, [
         h("div", { style: "flex:1;min-width:0;" }, [
-          h("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:4px;" }, [
+          h("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;" }, [
             h("span", { style: `font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:6px;background:${isCrit ? "rgba(217,48,37,0.15)" : "rgba(245,158,11,0.15)"};color:${isCrit ? "var(--danger)" : "var(--warning)"};text-transform:uppercase;` }, rc.severity),
+            rc.step_badge ? h("span", {
+              style: "font-size:0.72rem;font-weight:700;font-family:var(--font-mono);padding:2px 9px;border-radius:6px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--border);"
+            }, rc.step_badge) : null,
+            rc.component ? h("span", {
+              style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--fg-muted);background:var(--bg-inset);padding:2px 8px;border-radius:6px;"
+            }, rc.component) : null,
             h("span", { style: "font-size:0.75rem;font-weight:600;color:var(--accent);" }, `Confidence: ${Math.round((rc.confidence || 0.95) * 100)}%`),
             h("span", { style: "font-size:0.75rem;color:var(--fg-subtle);" }, `Namespace: ${rc.namespace}`)
-          ]),
+          ].filter(Boolean)),
           h("h3", { style: "font-size:1.05rem;font-weight:700;color:var(--fg);margin:0;" }, rc.title),
-          h("p", { style: "font-size:0.82rem;color:var(--fg-muted);margin:4px 0 0;line-height:1.4;" }, rc.summary)
+          h("p", { style: "font-size:0.82rem;color:var(--fg-muted);margin:4px 0 0;line-height:1.45;" }, rc.summary)
         ])
       ]),
 
@@ -2025,7 +3038,7 @@ function renderDiagnosticsRCA(data) {
 
       // Remediation Command
       rc.remediation ? h("div", { style: "display:flex;flex-direction:column;gap:6px;" }, [
-        h("div", { style: "font-size:0.72rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;" }, "Suggested AI Remediation Action"),
+        h("div", { style: "font-size:0.72rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;" }, "Suggested 12-Step Runbook Action"),
         h("div", { className: "code-action-box" }, [
           h("code", { style: "word-break:break-all;" }, rc.remediation.command || rc.remediation.action),
           h("button", {
@@ -2047,7 +3060,7 @@ function renderDiagnosticsRCA(data) {
         style: "align-self:flex-start;",
         onclick: () => openAIDiagnoseModal({
           namespace: rc.namespace,
-          question: `Investigate this finding and suggest concrete next steps: "${rc.title}" — ${rc.summary}. `
+          question: `Using the 12-Step kubectl apply Machine runbook, investigate this finding at ${rc.step_badge || "this stage"} and suggest concrete next steps: "${rc.title}" — ${rc.summary}. `
             + `Affected: ${(rc.folded_failures || []).join(", ")}.`,
           title: `Diagnose with AI — ${rc.title}`,
         }),
@@ -2055,7 +3068,7 @@ function renderDiagnosticsRCA(data) {
     ].filter(Boolean));
   });
 
-  renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, ...rcaCards]));
+  renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, ...rcaCards].filter(Boolean)));
 }
 
 // -- view: audit logs & timeline ----------------------------------------------
@@ -2095,12 +3108,17 @@ function renderAuditAndEvents(data) {
   });
 
   (data.events || []).forEach((e) => {
+    const kind = e.involved_kind || e.involved_object_kind || "Object";
+    const name = e.involved_name || e.involved_object_name || "unknown";
     allItems.push({
       type: "event",
       timestamp: e.last_timestamp || e.first_timestamp,
       actor: e.source_component || "k8s-controller",
       action: e.reason,
-      target: `${e.involved_object_kind}/${e.involved_object_name}`,
+      target: `${kind}/${name}`,
+      involved_kind: kind,
+      involved_name: name,
+      namespace: e.namespace || "",
       details: e.message,
       event_type: e.type,
       count: e.count
@@ -2138,7 +3156,16 @@ function renderAuditAndEvents(data) {
           h("div", { style: "display:flex;align-items:center;gap:6px;" }, [
             h("span", { style: `font-size:0.68rem;font-weight:700;padding:2px 6px;border-radius:4px;background:${isAudit ? "var(--accent-soft)" : "var(--bg-inset)"};color:${isAudit ? "var(--accent)" : "var(--fg-muted)"};text-transform:uppercase;` }, isAudit ? "AUDIT" : "EVENT"),
             h("span", { style: "font-weight:700;font-size:0.88rem;color:var(--fg);" }, item.action),
-            h("span", { style: "font-family:var(--font-mono);font-size:0.8rem;color:var(--accent);" }, item.target)
+            item.involved_kind && item.involved_name
+              ? h("button", {
+                  type: "button",
+                  class: "btn--unstyled",
+                  style: "font-family:var(--font-mono);font-size:0.8rem;color:var(--accent);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;",
+                  title: "Click to view YAML manifest",
+                  onclick: () => openManifestModal(item.involved_kind, item.involved_name, item.namespace || ""),
+                }, item.target)
+              : h("span", { style: "font-family:var(--font-mono);font-size:0.8rem;color:var(--accent);" }, item.target),
+            item.namespace ? h("span", { class: "cmap-chip" }, item.namespace) : null,
           ]),
           h("span", { style: "font-size:0.75rem;color:var(--fg-subtle);" }, timeAgo(item.timestamp))
         ]),
@@ -2212,7 +3239,7 @@ function renderRolloutModal(data, workloadType, name, namespace) {
 
       h("div", { style: "display:flex;align-items:center;gap:8px;" }, [
         h("span", { style: "font-size:0.75rem;color:var(--fg-subtle);" }, rev.created_at ? timeAgo(rev.created_at) : ""),
-        !isActive ? h("button", {
+        !isActive && canOperate() ? h("button", {
           className: "btn btn--primary btn--sm",
           style: "padding:5px 12px;font-size:0.78rem;font-weight:600;",
           onclick: async () => {
@@ -2338,19 +3365,253 @@ function renderPodInspectorModal(data, podName, namespace) {
     }),
   }, "✨ Diagnose with AI");
 
+  const pipelineSteps = data.pipeline_steps || [];
+  const pipelineChecklist = pipelineSteps.length ? h("div", {
+    style: "display:flex;flex-direction:column;gap:6px;"
+  }, [
+    h("span", { style: "font-size:0.72rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.04em;" },
+      "12-Step Delivery Pipeline Status (kubectl apply → Traffic)"),
+    h("div", {
+      style: "display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:8px;"
+    }, pipelineSteps.map((s) => {
+      const isPass = s.status === "passed";
+      const isFail = s.status === "failed";
+      const color = isPass ? "var(--success)" : isFail ? "var(--danger)" : "var(--warning)";
+      const iconText = isPass ? "✓" : isFail ? "✗" : "⋯";
+      return h("div", {
+        style: `padding:9px 11px;border-radius:9px;background:var(--bg-inset);border:1px solid ${isFail ? "var(--danger)" : "var(--border)"};display:flex;flex-direction:column;gap:3px;`
+      }, [
+        h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:6px;" }, [
+          h("span", { style: "font-size:0.7rem;font-weight:800;font-family:var(--font-mono);color:var(--accent);" }, s.step),
+          h("span", { style: `font-size:0.7rem;font-weight:700;color:${color};` }, `${iconText} ${s.status.toUpperCase()}`)
+        ]),
+        h("div", { style: "font-size:0.8rem;font-weight:700;color:var(--fg);" }, s.title),
+        h("div", { style: "font-size:0.73rem;color:var(--fg-muted);line-height:1.35;word-break:break-word;" }, s.detail || "")
+      ]);
+    }))
+  ]) : null;
+
   renderInto(body, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [
     aiButton,
+    pipelineChecklist,
     h("div", { style: "display:flex;flex-direction:column;gap:6px;" }, [
       h("span", { style: "font-size:0.72rem;font-weight:700;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.04em;" }, "Container Specifications & Resource Allocation"),
       ...containerCards
     ]),
     terminalBox
-  ]));
+  ].filter(Boolean)));
 }
 
 function closePodInspectorModal() {
   const modal = $("pod-inspector-modal");
   if (modal) modal.hidden = true;
+}
+
+// -- Safe Markdown Renderer for AI Responses ---------------------------------
+// Converts agent Markdown (headings, bold, italic, inline code, fenced code
+// blocks with copy button, bullet/numbered lists, blockquotes, and tables) into
+// sanitized DOM nodes inside a `.ai-markdown` wrapper. HTML entities are
+// escaped first so untrusted pod logs or resource names cannot inject scripts.
+
+function formatInlineMarkdown(rawLine) {
+  // 1. Extract inline code spans `...` first so bold/italic regexes don't touch them
+  const codeTokens = [];
+  let text = String(rawLine || "").replace(/`([^`\n]+)`/g, (_, code) => {
+    const idx = codeTokens.length;
+    codeTokens.push(`<code class="ai-md-inline-code">${escapeHtml(code)}</code>`);
+    return `\x00CODE_${idx}\x00`;
+  });
+
+  // 2. Escape remaining HTML
+  text = escapeHtml(text);
+
+  // 3. Bold (**...** or __...__) and Italic (*...*)
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  text = text.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+
+  // 4. Restore inline code tokens
+  text = text.replace(/\x00CODE_(\d+)\x00/g, (_, idx) => codeTokens[Number(idx)] || "");
+  return text;
+}
+
+function renderMarkdownNode(rawText) {
+  const wrapper = h("div", { className: "ai-markdown" });
+  const text = String(rawText || "").replace(/\r\n/g, "\n").trim();
+  if (!text) {
+    wrapper.textContent = "No response.";
+    return wrapper;
+  }
+
+  // Split out fenced code blocks ```lang ... ```
+  const segments = [];
+  const fenceRegex = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g;
+  let lastIdx = 0;
+  let match;
+  while ((match = fenceRegex.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      segments.push({ type: "prose", content: text.slice(lastIdx, match.index) });
+    }
+    segments.push({ type: "code", lang: (match[1] || "text").trim(), content: match[2].replace(/\n$/, "") });
+    lastIdx = fenceRegex.lastIndex;
+  }
+  if (lastIdx < text.length) {
+    segments.push({ type: "prose", content: text.slice(lastIdx) });
+  }
+
+  for (const seg of segments) {
+    if (seg.type === "code") {
+      const copyBtn = h("button", {
+        type: "button",
+        className: "ai-md-codeblock__copy",
+        onclick: () => {
+          navigator.clipboard?.writeText(seg.content);
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+        }
+      }, "Copy");
+      const block = h("div", { className: "ai-md-codeblock" }, [
+        h("div", { className: "ai-md-codeblock__header" }, [
+          h("span", {}, seg.lang || "code"),
+          copyBtn,
+        ]),
+        h("pre", {}, [h("code", {}, seg.content)]),
+      ]);
+      wrapper.appendChild(block);
+      continue;
+    }
+
+    // Parse line-oriented blocks (headings, lists, tables, hr, blockquotes, paragraphs)
+    const lines = seg.content.split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        i++;
+        continue;
+      }
+
+      // Horizontal rule
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        wrapper.appendChild(h("hr"));
+        i++;
+        continue;
+      }
+
+      // Heading (# to ####)
+      const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+      if (headingMatch) {
+        const level = Math.min(4, headingMatch[1].length);
+        const headingText = headingMatch[2].replace(/^\*\*(.+)\*\*$/, "$1");
+        const el = document.createElement(`h${level}`);
+        el.innerHTML = formatInlineMarkdown(headingText);
+        wrapper.appendChild(el);
+        i++;
+        continue;
+      }
+
+      // Markdown Table (| col | col | followed by | --- | --- |)
+      if (trimmed.startsWith("|") && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[i + 1])) {
+        const parseCells = (rowStr) =>
+          rowStr.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        const headers = parseCells(trimmed);
+        i += 2; // skip header + separator
+        const rows = [];
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          rows.push(parseCells(lines[i]));
+          i++;
+        }
+        const table = document.createElement("table");
+        const thead = document.createElement("thead");
+        const trHead = document.createElement("tr");
+        headers.forEach((hdr) => {
+          const th = document.createElement("th");
+          th.innerHTML = formatInlineMarkdown(hdr);
+          trHead.appendChild(th);
+        });
+        thead.appendChild(trHead);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+        rows.forEach((r) => {
+          const tr = document.createElement("tr");
+          headers.forEach((_, colIdx) => {
+            const td = document.createElement("td");
+            td.innerHTML = formatInlineMarkdown(r[colIdx] || "");
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        const tableWrap = h("div", { className: "ai-md-table-wrap" }, [table]);
+        wrapper.appendChild(tableWrap);
+        continue;
+      }
+
+      // Unordered list (*, -, •)
+      if (/^(\*|-|•)\s+/.test(trimmed)) {
+        const ul = document.createElement("ul");
+        while (i < lines.length && /^(\*|-|•)\s+/.test(lines[i].trim())) {
+          const itemText = lines[i].trim().replace(/^(\*|-|•)\s+/, "");
+          const li = document.createElement("li");
+          li.innerHTML = formatInlineMarkdown(itemText);
+          ul.appendChild(li);
+          i++;
+        }
+        wrapper.appendChild(ul);
+        continue;
+      }
+
+      // Ordered list (1. 2. ...)
+      if (/^\d+\.\s+/.test(trimmed)) {
+        const ol = document.createElement("ol");
+        while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+          const itemText = lines[i].trim().replace(/^\d+\.\s+/, "");
+          const li = document.createElement("li");
+          li.innerHTML = formatInlineMarkdown(itemText);
+          ol.appendChild(li);
+          i++;
+        }
+        wrapper.appendChild(ol);
+        continue;
+      }
+
+      // Blockquote (> ...)
+      if (trimmed.startsWith(">")) {
+        const quoteLines = [];
+        while (i < lines.length && lines[i].trim().startsWith(">")) {
+          quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
+          i++;
+        }
+        const bq = document.createElement("blockquote");
+        bq.innerHTML = quoteLines.map(formatInlineMarkdown).join("<br>");
+        wrapper.appendChild(bq);
+        continue;
+      }
+
+      // Regular paragraph (group consecutive plain lines)
+      const paraLines = [];
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        !/^(#{1,4}\s+|(\*|-|•)\s+|\d+\.\s+|>\s*|(-{3,}|\*{3,}|_{3,})$|\|)/.test(lines[i].trim())
+      ) {
+        paraLines.push(lines[i].trim());
+        i++;
+      }
+      if (paraLines.length) {
+        const p = document.createElement("p");
+        p.innerHTML = paraLines.map(formatInlineMarkdown).join("<br>");
+        wrapper.appendChild(p);
+      } else {
+        i++;
+      }
+    }
+  }
+
+  return wrapper;
 }
 
 // -- AI Diagnose Modal --------------------------------------------------------
@@ -2382,9 +3643,7 @@ async function openAIDiagnoseModal({ namespace, resourceType, resourceName, ques
       }, result.error));
       return;
     }
-    renderInto(body, h("div", {
-      style: "font-size:0.88rem;line-height:1.6;color:var(--fg);white-space:pre-wrap;"
-    }, result.answer || "No response."));
+    renderInto(body, renderMarkdownNode(result.answer || "No response."));
   } catch (err) {
     renderInto(body, errorState(err, () => openAIDiagnoseModal({ namespace, resourceType, resourceName, question, title })));
   }
@@ -2415,9 +3674,14 @@ function renderAIChatMessages() {
   // Not renderInto(): messages must be direct siblings of the flex
   // container for its `gap` spacing to apply between bubbles, and
   // renderInto() only accepts a single node, not a list.
-  container.replaceChildren(...state.aiChatMessages.map((m) =>
-    h("div", { className: `ai-chat-msg ai-chat-msg--${m.role}` }, m.text)
-  ));
+  container.replaceChildren(...state.aiChatMessages.map((m) => {
+    if (m.role === "assistant") {
+      return h("div", { className: "ai-chat-msg ai-chat-msg--assistant" }, [
+        renderMarkdownNode(m.text),
+      ]);
+    }
+    return h("div", { className: `ai-chat-msg ai-chat-msg--${m.role}` }, m.text);
+  }));
   container.scrollTop = container.scrollHeight;
 }
 
@@ -2497,6 +3761,14 @@ function initAIChatPanel() {
   $("ai-chat-fab")?.addEventListener("click", toggleAIChatPanel);
   $("ai-chat-close")?.addEventListener("click", closeAIChatPanel);
   $("ai-chat-send")?.addEventListener("click", sendAIChatMessage);
+  $("ai-chat-clear")?.addEventListener("click", () => {
+    resetAIChat();
+    $("ai-chat-input")?.focus();
+  });
+  $("ai-chat-expand")?.addEventListener("click", () => {
+    const panel = $("ai-chat-panel");
+    if (panel) panel.classList.toggle("ai-chat-panel--wide");
+  });
 
   const input = $("ai-chat-input");
   input?.addEventListener("keydown", (e) => {
@@ -2593,6 +3865,9 @@ const viewLoaders = {
   network: loadNetworkTopology,
   storage: loadStorageTopology,
   events: loadEvents,
+  helm: loadHelmView,
+  ecosystem: loadEcosystemView,
+  cost: loadCostView,
 };
 
 
@@ -2748,12 +4023,11 @@ function wireStaticControls() {
         const items = groupHeader.nextElementSibling;
         if (items) {
           const wasCollapsed = items.classList.contains("is-collapsed");
-          // Accordion: opening one group closes the others, so the sidebar
-          // doesn't grow into one long always-expanded list again as more
-          // groups/items get added over time. Closing the open group (click
-          // to collapse it) doesn't touch its siblings.
           if (wasCollapsed) collapseOtherNavGroups(items);
           setNavGroupCollapsed(items, !wasCollapsed);
+          if (wasCollapsed && groupHeader.dataset.defaultView) {
+            switchView(groupHeader.dataset.defaultView);
+          }
         }
       }
     });
@@ -2870,13 +4144,22 @@ const PROVIDER_ICONS = {
 const PROVIDER_COLORS = { gke: "var(--provider-gke)", eks: "var(--provider-eks)", aks: "var(--provider-aks)", local: "var(--provider-local)" };
 const ENV_PILL_COLORS = { prod: "var(--danger)", nonprod: "var(--warning)", sandbox: "var(--info)", default: "var(--unknown)" };
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function renderClusterPanel(clusters) {
   state.allClusters = clusters;
   const container = $("sidebar-active-cluster-card");
   const viewAllBtnText = $("view-all-clusters-text");
   
   if (viewAllBtnText) {
-    viewAllBtnText.textContent = `View All Clusters (${clusters ? clusters.length : 0})`;
+    viewAllBtnText.textContent = `Cluster Fleet (${clusters ? clusters.length : 0})`;
   }
 
   if (!container) return;
@@ -2891,6 +4174,8 @@ function renderClusterPanel(clusters) {
   const providerColor = PROVIDER_COLORS[activeCluster.provider] || "#64748b";
   const envColor = ENV_PILL_COLORS[activeCluster.environment] || ENV_PILL_COLORS.default;
   const icon = PROVIDER_ICONS[activeCluster.provider] || PROVIDER_ICONS.local;
+  const safeName = escapeHtml(activeCluster.name);
+  const safeEnv = escapeHtml(activeCluster.environment);
 
   container.innerHTML = `
     <div class="cluster-card" style="
@@ -2905,17 +4190,29 @@ function renderClusterPanel(clusters) {
       </div>
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:0.82rem;font-weight:700;color:var(--color-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${activeCluster.name}">
-            ${activeCluster.name}
+          <span style="font-size:0.82rem;font-weight:700;color:var(--color-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${safeName}">
+            ${safeName}
           </span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
           <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 2px rgba(16,185,129,0.2);"></span>
-          <span style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:99px;background:${envColor}20;color:${envColor};text-transform:uppercase;letter-spacing:0.04em;">${activeCluster.environment}</span>
+          <span style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:99px;background:${envColor}20;color:${envColor};text-transform:uppercase;letter-spacing:0.04em;">${safeEnv}</span>
         </div>
       </div>
+      ${canAdmin() ? `<button type="button" id="sidebar-edit-active-cluster-btn" title="Edit cluster details" style="
+        width:26px;height:26px;border-radius:7px;border:1px solid transparent;
+        background:transparent;color:var(--fg-muted);display:inline-flex;align-items:center;
+        justify-content:center;cursor:pointer;flex-shrink:0;transition:all 150ms;
+      " onmouseenter="this.style.background='var(--bg-elevated)';this.style.color='var(--accent)';this.style.borderColor='var(--border)'" onmouseleave="this.style.background='transparent';this.style.color='var(--fg-muted)';this.style.borderColor='transparent'">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      </button>` : ""}
     </div>
   `;
+
+  $("sidebar-edit-active-cluster-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openClusterModal(activeCluster);
+  });
 }
 
 function initClustersModal() {
@@ -2947,6 +4244,10 @@ function initClustersModal() {
       const providerColor = PROVIDER_COLORS[c.provider] || "#64748b";
       const envColor = ENV_PILL_COLORS[c.environment] || ENV_PILL_COLORS.default;
       const icon = PROVIDER_ICONS[c.provider] || PROVIDER_ICONS.local;
+      const safeName = escapeHtml(c.name);
+      const safeEnv = escapeHtml(c.environment);
+      const safeProv = escapeHtml((c.provider || "").toUpperCase());
+      const safeId = escapeHtml(c.id);
 
       const item = document.createElement("div");
       item.style.cssText = `
@@ -2964,10 +4265,10 @@ function initClustersModal() {
           </div>
           <div style="flex:1;min-width:0;">
             <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-size:0.88rem;font-weight:700;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name}</span>
-              <span style="font-size:0.65rem;font-weight:600;padding:2px 7px;border-radius:99px;background:${envColor}20;color:${envColor};text-transform:uppercase;letter-spacing:0.04em;">${c.environment}</span>
+              <span style="font-size:0.88rem;font-weight:700;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeName}</span>
+              <span style="font-size:0.65rem;font-weight:600;padding:2px 7px;border-radius:99px;background:${envColor}20;color:${envColor};text-transform:uppercase;letter-spacing:0.04em;">${safeEnv}</span>
             </div>
-            <div style="font-size:0.75rem;color:var(--fg-subtle);margin-top:2px;">Provider: ${c.provider.toUpperCase()} &bull; ID: ${c.id}</div>
+            <div style="font-size:0.75rem;color:var(--fg-subtle);margin-top:2px;">Provider: ${safeProv} &bull; ID: ${safeId}</div>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
@@ -2976,19 +4277,26 @@ function initClustersModal() {
               ? `<span style="font-size:0.78rem;font-weight:700;color:var(--accent);padding:6px 12px;border-radius:8px;background:var(--accent-soft);display:inline-flex;align-items:center;gap:4px;">
                   <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span> Active
                  </span>`
-              : `<button type="button" class="connect-cluster-action-btn" data-id="${c.id}" style="
+              : `<button type="button" class="connect-cluster-action-btn" data-id="${safeId}" style="
                   padding:6px 14px;border-radius:8px;border:1.5px solid var(--border);
                   background:transparent;color:var(--fg);font-size:0.78rem;font-weight:600;
                   cursor:pointer;font-family:inherit;transition:all 150ms;
                  " onmouseenter="this.style.background='var(--bg-hover)';this.style.borderColor='var(--accent)'" onmouseleave="this.style.background='transparent';this.style.borderColor='var(--border)'">Connect</button>`
           }
-          <button type="button" class="delete-cluster-action-btn" data-id="${c.id}" title="Remove cluster '${c.name}'" style="
+          ${canAdmin() ? `<button type="button" class="edit-cluster-action-btn" data-id="${safeId}" title="Edit cluster '${safeName}'" style="
+            width:32px;height:32px;border-radius:8px;border:1.5px solid transparent;
+            background:transparent;color:var(--fg-subtle);display:inline-flex;align-items:center;
+            justify-content:center;cursor:pointer;transition:all 150ms;
+          " onmouseenter="this.style.background='var(--bg-hover)';this.style.color='var(--accent)'" onmouseleave="this.style.background='transparent';this.style.color='var(--fg-subtle)'">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          </button>
+          <button type="button" class="delete-cluster-action-btn" data-id="${safeId}" title="Remove cluster '${safeName}'" style="
             width:32px;height:32px;border-radius:8px;border:1.5px solid transparent;
             background:transparent;color:var(--fg-subtle);display:inline-flex;align-items:center;
             justify-content:center;cursor:pointer;transition:all 150ms;
           " onmouseenter="this.style.background='rgba(239,68,68,0.12)';this.style.color='var(--danger)'" onmouseleave="this.style.background='transparent';this.style.color='var(--fg-subtle)'">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
-          </button>
+          </button>` : ""}
         </div>
       `;
 
@@ -2997,6 +4305,13 @@ function initClustersModal() {
         await connectToCluster(c.id);
         renderList(searchInput?.value || "");
         if (typeof modal.close === "function") modal.close();
+      });
+
+      const editBtn = item.querySelector(".edit-cluster-action-btn");
+      editBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof modal.close === "function") modal.close();
+        openClusterModal(c);
       });
 
       const deleteBtn = item.querySelector(".delete-cluster-action-btn");
@@ -3046,10 +4361,7 @@ function initClustersModal() {
 
   addBtn?.addEventListener("click", () => {
     closeModal();
-    const onboardModal = $("onboard-modal");
-    if (onboardModal && typeof onboardModal.showModal === "function") {
-      onboardModal.showModal();
-    }
+    openClusterModal(null);
   });
 }
 
@@ -3067,6 +4379,15 @@ async function loadClusterPanel() {
   }
 }
 
+let _editingCluster = null;
+let _openClusterModalImpl = null;
+
+function openClusterModal(cluster = null) {
+  if (_openClusterModalImpl) {
+    _openClusterModalImpl(cluster);
+  }
+}
+
 function initOnboardModal() {
   const modal = $("onboard-modal");
   const trigger = $("onboard-trigger");
@@ -3074,8 +4395,20 @@ function initOnboardModal() {
   const cancelBtn = $("onboard-modal-cancel");
   const saveBtn = $("onboard-save-btn");
   const statusEl = $("onboard-status");
+  const titleEl = $("onboard-modal-title");
+  const subtitleEl = $("onboard-modal-subtitle");
+  const idHintEl = $("onboard-id-hint");
 
-  if (!modal || !trigger) return;
+  if (!modal) return;
+
+  const providerTabs = document.querySelectorAll(".provider-tab");
+  const colors = { gke: "#4285F4", eks: "#FF9900", aks: "#0078D4", local: "#188038" };
+  const softBgs = {
+    gke: "color-mix(in srgb, #4285F4 12%, transparent)",
+    eks: "color-mix(in srgb, #FF9900 12%, transparent)",
+    aks: "color-mix(in srgb, #0078D4 12%, transparent)",
+    local: "color-mix(in srgb, #188038 12%, transparent)",
+  };
 
   function showStatus(text, type = "info") {
     if (!statusEl) return;
@@ -3103,17 +4436,128 @@ function initOnboardModal() {
     statusEl.style.display = "none";
   }
 
-  function openModal() {
+  function selectProviderTab(provider) {
+    const pVal = provider || "gke";
+    if ($("onboard-provider")) $("onboard-provider").value = pVal;
+    providerTabs.forEach((t) => {
+      const p = t.dataset.provider;
+      const isSelected = p === pVal;
+      t.setAttribute("aria-pressed", isSelected ? "true" : "false");
+      t.style.borderColor = isSelected ? colors[p] : "var(--border)";
+      t.style.background = isSelected ? softBgs[p] : "transparent";
+      const span = t.querySelector("span");
+      if (span) span.style.color = isSelected ? colors[p] : "var(--fg-muted)";
+    });
+    document.querySelectorAll(".provider-fields").forEach((pf) => (pf.style.display = "none"));
+    const pfEl = $(`provider-fields-${pVal}`);
+    if (pfEl) pfEl.style.display = "flex";
+  }
+
+  function selectEnvironmentPill(env) {
+    const val = env || "sandbox";
+    if ($("onboard-environment")) $("onboard-environment").value = val;
+    document.querySelectorAll('input[name="onboard-env"]').forEach((inp) => {
+      inp.checked = inp.value === val;
+    });
+    document.querySelectorAll(".env-pill-opt").forEach((pill) => {
+      const isMatch = pill.dataset.val === val;
+      pill.style.background = isMatch ? "var(--grad-pill-selected)" : "transparent";
+      pill.style.borderColor = isMatch ? "var(--accent)" : "var(--border)";
+      pill.style.color = isMatch ? "var(--accent)" : "var(--fg-muted)";
+    });
+  }
+
+  function resetFormFields() {
+    if ($("onboard-name")) $("onboard-name").value = "";
+    if ($("onboard-description")) $("onboard-description").value = "";
+    if ($("gke-project")) $("gke-project").value = "";
+    if ($("gke-region")) $("gke-region").value = "";
+    if ($("gke-cluster-name")) $("gke-cluster-name").value = "";
+    if ($("gke-impersonate-sa")) $("gke-impersonate-sa").value = "";
+    if ($("eks-region")) $("eks-region").value = "";
+    if ($("eks-cluster-name")) $("eks-cluster-name").value = "";
+    if ($("eks-role-arn")) $("eks-role-arn").value = "";
+    if ($("eks-log-group")) $("eks-log-group").value = "";
+    if ($("aks-resource-group")) $("aks-resource-group").value = "";
+    if ($("aks-cluster-name")) $("aks-cluster-name").value = "";
+    if ($("aks-subscription-id")) $("aks-subscription-id").value = "";
+    if ($("aks-tenant-id")) $("aks-tenant-id").value = "";
+    if ($("aks-client-id")) $("aks-client-id").value = "";
+    if ($("aks-log-analytics-workspace")) $("aks-log-analytics-workspace").value = "";
+    if ($("local-kubeconfig-path")) $("local-kubeconfig-path").value = "~/.kube/config";
+    if ($("local-context-select")) $("local-context-select").innerHTML = "";
+    if ($("local-context-wrap")) $("local-context-wrap").style.display = "none";
+  }
+
+  function openModal(cluster = null) {
     hideStatus();
+    _editingCluster = cluster || null;
+    resetFormFields();
+
+    if (_editingCluster) {
+      const cfg = _editingCluster.config || {};
+      if (titleEl) titleEl.textContent = "Edit Cluster";
+      if (subtitleEl) subtitleEl.textContent = `Update display name, environment, or connection settings`;
+      if (saveBtn) saveBtn.textContent = "Save Changes";
+      if (idHintEl) idHintEl.innerHTML = `Cluster ID: <code style="font-family:var(--font-mono);color:var(--fg);">${escapeHtml(_editingCluster.id)}</code> (preserved when renaming)`;
+
+      if ($("onboard-name")) $("onboard-name").value = _editingCluster.name || "";
+      if ($("onboard-description")) $("onboard-description").value = _editingCluster.description || "";
+      selectProviderTab(_editingCluster.provider || "gke");
+      selectEnvironmentPill(_editingCluster.environment || "sandbox");
+
+      if (_editingCluster.provider === "gke") {
+        if ($("gke-project")) $("gke-project").value = cfg.project || "";
+        if ($("gke-region")) $("gke-region").value = cfg.zone || cfg.region || "";
+        if ($("gke-cluster-name")) $("gke-cluster-name").value = cfg.cluster_name || "";
+        if ($("gke-impersonate-sa")) $("gke-impersonate-sa").value = cfg.impersonate_service_account || "";
+      } else if (_editingCluster.provider === "eks") {
+        if ($("eks-region")) $("eks-region").value = cfg.region || "";
+        if ($("eks-cluster-name")) $("eks-cluster-name").value = cfg.cluster_name || "";
+        if ($("eks-role-arn")) $("eks-role-arn").value = cfg.role_arn || "";
+        if ($("eks-log-group")) $("eks-log-group").value = cfg.cloudwatch_log_group || "";
+      } else if (_editingCluster.provider === "aks") {
+        if ($("aks-resource-group")) $("aks-resource-group").value = cfg.resource_group || "";
+        if ($("aks-cluster-name")) $("aks-cluster-name").value = cfg.cluster_name || "";
+        if ($("aks-subscription-id")) $("aks-subscription-id").value = cfg.subscription_id || "";
+        if ($("aks-tenant-id")) $("aks-tenant-id").value = cfg.tenant_id || "";
+        if ($("aks-client-id")) $("aks-client-id").value = cfg.client_id || cfg.managed_identity_client_id || "";
+        if ($("aks-log-analytics-workspace")) $("aks-log-analytics-workspace").value = cfg.log_analytics_workspace_id || "";
+      } else if (_editingCluster.provider === "local") {
+        if ($("local-kubeconfig-path")) $("local-kubeconfig-path").value = cfg.kubeconfig_path || "~/.kube/config";
+        if (cfg.context_name && $("local-context-select")) {
+          const select = $("local-context-select");
+          select.innerHTML = "";
+          const opt = document.createElement("option");
+          opt.value = cfg.context_name;
+          opt.textContent = cfg.context_name;
+          opt.selected = true;
+          select.appendChild(opt);
+          if ($("local-context-wrap")) $("local-context-wrap").style.display = "block";
+        }
+      }
+    } else {
+      if (titleEl) titleEl.textContent = "Add Cluster";
+      if (subtitleEl) subtitleEl.textContent = "Connect a Kubernetes cluster to monitor";
+      if (saveBtn) saveBtn.textContent = "Add Cluster";
+      if (idHintEl) idHintEl.textContent = "ID is auto-generated from the name";
+      selectProviderTab("gke");
+      selectEnvironmentPill("sandbox");
+    }
+
     if (typeof modal.showModal === "function") {
       modal.showModal();
     } else {
       modal.hidden = false;
     }
+    setTimeout(() => $("onboard-name")?.focus(), 50);
   }
+
+  _openClusterModalImpl = openModal;
 
   function closeModal() {
     hideStatus();
+    _editingCluster = null;
     if (typeof modal.close === "function") {
       modal.close();
     } else {
@@ -3121,38 +4565,13 @@ function initOnboardModal() {
     }
   }
 
-  trigger.addEventListener("click", openModal);
+  trigger?.addEventListener("click", () => openModal(null));
   closeBtn?.addEventListener("click", closeModal);
   cancelBtn?.addEventListener("click", closeModal);
 
-  // Provider Tab Switching
-  const providerTabs = document.querySelectorAll(".provider-tab");
-  const colors = { gke: "#4285F4", eks: "#FF9900", aks: "#0078D4", local: "#188038" };
-  const softBgs = {
-    gke: "color-mix(in srgb, #4285F4 12%, transparent)",
-    eks: "color-mix(in srgb, #FF9900 12%, transparent)",
-    aks: "color-mix(in srgb, #0078D4 12%, transparent)",
-    local: "color-mix(in srgb, #188038 12%, transparent)",
-  };
-
   providerTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
-      const provider = tab.dataset.provider;
-      $("onboard-provider").value = provider;
-
-      providerTabs.forEach((t) => {
-        const p = t.dataset.provider;
-        const isSelected = p === provider;
-        t.setAttribute("aria-pressed", isSelected ? "true" : "false");
-        t.style.borderColor = isSelected ? colors[p] : "var(--border)";
-        t.style.background = isSelected ? softBgs[p] : "transparent";
-        const span = t.querySelector("span");
-        if (span) span.style.color = isSelected ? colors[p] : "var(--fg-muted)";
-      });
-
-      document.querySelectorAll(".provider-fields").forEach((pf) => (pf.style.display = "none"));
-      const pfEl = $(`provider-fields-${provider}`);
-      if (pfEl) pfEl.style.display = "flex";
+      selectProviderTab(tab.dataset.provider);
     });
   });
 
@@ -3160,32 +4579,36 @@ function initOnboardModal() {
   const envInputs = document.querySelectorAll('input[name="onboard-env"]');
   envInputs.forEach((input) => {
     input.addEventListener("change", () => {
-      const val = input.value;
-      $("onboard-environment").value = val;
-      document.querySelectorAll(".env-pill-opt").forEach((pill) => {
-        const isMatch = pill.dataset.val === val;
-        pill.style.background = isMatch ? "var(--grad-pill-selected)" : "transparent";
-        pill.style.borderColor = isMatch ? "var(--accent)" : "var(--border)";
-        pill.style.color = isMatch ? "var(--accent)" : "var(--fg-muted)";
-      });
+      selectEnvironmentPill(input.value);
     });
   });
 
   function getFormPayload() {
     const provider = $("onboard-provider").value;
     const name = $("onboard-name").value.trim();
-    const id = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "cluster-" + Date.now();
-    const team_id = (state.selectedTeamId || "platform").toLowerCase();
+    const description = $("onboard-description")?.value?.trim() || undefined;
+    const id = _editingCluster
+      ? _editingCluster.id
+      : (name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "cluster-" + Date.now());
+    const team_id = (_editingCluster?.team_id || state.selectedTeamId || "platform").toLowerCase();
+    const team_name = _editingCluster?.team_name || team_id.toUpperCase();
     const environment = $("onboard-environment").value;
 
     let config = {};
     if (provider === "gke") {
+      const regionVal = $("gke-region").value.trim();
+      const prevCfg = (_editingCluster && _editingCluster.provider === "gke" && _editingCluster.config) || {};
+      // Preserve zone vs region key if editing an existing zonal GKE cluster
+      const isZone = /^[a-z]+-[a-z0-9]+-[a-z]$/.test(regionVal);
       config = {
+        ...prevCfg,
         project: $("gke-project").value.trim(),
-        region: $("gke-region").value.trim(),
+        ...(isZone ? { zone: regionVal } : { region: regionVal }),
         cluster_name: $("gke-cluster-name").value.trim() || name,
         impersonate_service_account: $("gke-impersonate-sa")?.value?.trim() || undefined,
       };
+      if (isZone) delete config.region;
+      else delete config.zone;
     } else if (provider === "eks") {
       config = {
         region: $("eks-region").value.trim(),
@@ -3197,16 +4620,19 @@ function initOnboardModal() {
       config = {
         resource_group: $("aks-resource-group").value.trim(),
         cluster_name: $("aks-cluster-name").value.trim() || name,
+        subscription_id: $("aks-subscription-id")?.value?.trim() || undefined,
+        tenant_id: $("aks-tenant-id")?.value?.trim() || undefined,
+        client_id: $("aks-client-id")?.value?.trim() || undefined,
         log_analytics_workspace_id: $("aks-log-analytics-workspace")?.value?.trim() || undefined,
       };
     } else if (provider === "local") {
       config = {
         kubeconfig_path: $("local-kubeconfig-path").value.trim(),
-        context_name: $("local-context-select")?.value || undefined,
+        context_name: $("local-context-select")?.value || (_editingCluster?.config?.context_name) || undefined,
       };
     }
 
-    return { id, name: name || id, provider, environment, team_id, team_name: team_id.toUpperCase(), config };
+    return { id, name: name || id, provider, environment, description, team_id, team_name, config };
   }
 
   const parseLocalBtn = $("local-parse-btn");
@@ -3251,26 +4677,34 @@ function initOnboardModal() {
 
   saveBtn?.addEventListener("click", async (e) => {
     e.preventDefault();
+    const isEditing = Boolean(_editingCluster);
     const payload = getFormPayload();
     if (!payload.name) {
-      showStatus("Please enter a Cluster Name", "error");
+      showStatus("Please enter a Cluster Display Name", "error");
       return;
     }
-    showStatus("Registering cluster...", "info");
+    showStatus(isEditing ? "Saving cluster changes..." : "Registering cluster...", "info");
     try {
-      const res = await api.onboardCluster(payload);
+      const res = isEditing
+        ? await api.updateCluster(payload.id, payload)
+        : await api.onboardCluster(payload);
       state.teams = res.teams;
       populateTeamSelect();
       const clusterSelect = $("cluster-select");
       if (clusterSelect) {
         clusterSelect.value = payload.id;
-        await onClusterChange();
+        if (!isEditing || state.selectedClusterId === payload.id) {
+          await onClusterChange();
+        }
       }
-      showStatus("✓ Cluster registered successfully!", "success");
-      loadClusterPanel();
-      setTimeout(closeModal, 1000);
+      showStatus(isEditing ? "✓ Cluster updated successfully!" : "✓ Cluster registered successfully!", "success");
+      await loadClusterPanel();
+      if (state.activeView === "clusters") {
+        await loadClustersView();
+      }
+      setTimeout(closeModal, 700);
     } catch (err) {
-      showStatus(`✗ Registration Failed: ${err.message}`, "error");
+      showStatus(`✗ ${isEditing ? "Update" : "Registration"} Failed: ${err.message}`, "error");
     }
   });
 }
@@ -3288,7 +4722,15 @@ async function bootstrap() {
     renderInto($("main"), errorState(err, () => window.location.reload()));
     return;
   }
-  $("auth-mode-text").textContent = `auth: ${status.auth_mode}`;
+  state.userRole = status.user?.role || "admin";
+  state.userSubject = status.user?.subject || "anonymous";
+  applyRoleVisibility();
+  const roleSuffix = status.user?.role ? ` (${status.user.role})` : "";
+  $("auth-mode-text").textContent = `auth: ${status.auth_mode}${roleSuffix}`;
+  if (status.disable_local_provider) {
+    const localTab = document.querySelector('.provider-tab[data-provider="local"]');
+    if (localTab) localTab.style.display = "none";
+  }
 
   try {
     state.teams = (await api.getTeams()).teams;
