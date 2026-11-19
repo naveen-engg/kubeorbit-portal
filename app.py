@@ -953,10 +953,19 @@ async def ecosystem_overview(ctx: ClusterContext = Depends(get_cluster_context))
 
 @app.get("/api/clusters/{cluster_id}/diagnostics/rca")
 async def root_cause_analysis(
+    cluster_id: str,
     namespace: Optional[str] = OptionalNamespaceQuery,
-    ctx: ClusterContext = Depends(get_cluster_context),
+    simulate: bool = Query(False, description="Simulate all 12 steps of the kubectl apply Machine"),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """AI-assisted root cause analysis, failure folding, and blast radius mapping."""
+    if simulate:
+        from kube_client.rca import get_simulated_12_step_rca
+
+        diag = get_simulated_12_step_rca(namespace or "kubeorbit-demo")
+        return {"cluster_id": cluster_id, "namespace": namespace, **diag}
+
+    ctx = await get_cluster_context(cluster_id=cluster_id, user=user)
     diag = await kube_client.diagnose_cluster_issues(ctx.context, ctx.kubeconfig, namespace)
     return {"cluster_id": ctx.cluster.id, "namespace": namespace, **diag}
 

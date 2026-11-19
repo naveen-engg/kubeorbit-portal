@@ -153,8 +153,8 @@ export const api = {
   getAuditLogs: (clusterId = null, limit = 50) =>
     apiFetch(`/api/audit/logs${qs({ cluster_id: clusterId, limit })}`),
 
-  getDiagnosticsRCA: (clusterId, namespace) =>
-    apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/diagnostics/rca${qs({ namespace })}`),
+  getDiagnosticsRCA: (clusterId, namespace, simulate = false) =>
+    apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/diagnostics/rca${qs({ namespace, simulate: simulate ? "true" : undefined })}`),
 
   aiDiagnose: (clusterId, { namespace, resourceType, resourceName, question } = {}) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/ai/diagnose`, {

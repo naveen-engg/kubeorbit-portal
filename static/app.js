@@ -2495,22 +2495,41 @@ function renderLogicalApplications(data) {
 
 // -- view: autonomous diagnostics & RCA --------------------------------------
 
+let selectedPipelineStageId = null;
+let selectedStepNumber = null;
+let selectedK8sComponentId = null;
+let selectedRcaKindFilter = "all"; // "all" | "active_failure" | "best_practice"
+let rcaSearchQuery = "";
+let simulateAll12Steps = false;
+let _kmAnimTimer = null;
+
 async function loadDiagnosticsRCA() {
   const container = $("diagnostics-content");
   const token = nextLoadToken("diagnostics");
   renderInto(container, loadingSkeleton());
   try {
-    const data = await api.getDiagnosticsRCA(state.selectedClusterId);
+    const data = await api.getDiagnosticsRCA(state.selectedClusterId, undefined, simulateAll12Steps);
     if (isStaleToken("diagnostics", token)) return;
     renderDiagnosticsRCA(data);
   } catch (err) {
     if (isStaleToken("diagnostics", token)) return;
+    // If the live cloud cluster is currently offline/destroyed, automatically
+    // load the 12-Step Simulation Lab so the operator can still explore all 12 steps.
+    if (!simulateAll12Steps) {
+      try {
+        simulateAll12Steps = true;
+        const simData = await api.getDiagnosticsRCA(state.selectedClusterId || "kubeorbit-gke", undefined, true);
+        if (isStaleToken("diagnostics", token)) return;
+        simData._autoFallbackReason = err.message || "Cluster unreachable";
+        renderDiagnosticsRCA(simData);
+        return;
+      } catch (_) {
+        // Fall through to errorState if backend itself is down
+      }
+    }
     renderInto(container, errorState(err, loadDiagnosticsRCA));
   }
 }
-
-let selectedPipelineStageId = null;
-let _kmAnimTimer = null;
 
 function buildKubectlMachineInfographic(data) {
   if (_kmAnimTimer) {
@@ -2521,20 +2540,23 @@ function buildKubectlMachineInfographic(data) {
   const summary = data.summary || { overall_score: 100, active_root_causes: 0, workloads_healthy: 0, workloads_total: 0 };
   const allRootCauses = data.root_causes || [];
   const activeCauses = allRootCauses.filter((r) => r.kind === "active_failure");
+  const stepCounts = data.step_counts || {};
 
-  // Map active failures to specific step buckets (9, 10a, 10b, 10c, 10d, 11, 12, 8)
+  const countForStep = (stepNum) =>
+    Number(stepCounts[stepNum] ?? stepCounts[String(stepNum)] ?? activeCauses.filter((r) => Number(r.step_number) === stepNum).length);
+
   const countByTag = (substr) =>
     activeCauses.filter((r) => (r.step_badge || "").toLowerCase().includes(substr.toLowerCase()));
 
-  const step8Stalls = countByTag("step 8");
-  const step9Stalls = countByTag("step 9");
+  const step8Stalls = activeCauses.filter((r) => Number(r.step_number) === 8);
+  const step9Stalls = activeCauses.filter((r) => Number(r.step_number) === 9);
   const step10aStalls = countByTag("10a");
   const step10bStalls = countByTag("10b");
   const step10cStalls = countByTag("10c");
   const step10dStalls = countByTag("10d");
-  const step10AllStalls = activeCauses.filter((r) => r.stage_id === "step-10");
-  const step11Stalls = countByTag("step 11");
-  const step12Stalls = countByTag("step 12");
+  const step10AllStalls = activeCauses.filter((r) => Number(r.step_number) === 10);
+  const step11Stalls = activeCauses.filter((r) => Number(r.step_number) === 11);
+  const step12Stalls = activeCauses.filter((r) => Number(r.step_number) === 12);
 
   const clusterName = state.clusterBadge?.name || state.selectedClusterId || "active-cluster";
   const providerName = (state.clusterBadge?.provider || "k8s").toUpperCase();
@@ -2548,51 +2570,58 @@ function buildKubectlMachineInfographic(data) {
     const dy = (145 + r * Math.sin(theta)).toFixed(1);
     const dotR = (i % 5 === 0 ? 1.9 : 1.3);
     const op = (0.45 + 0.5 * (1 - r / 50)).toFixed(2);
-    etcdDots.push(`<circle cx="${dx}" cy="${dy}" r="${dotR}" fill="#9fb0c7" opacity="${op}"/>`);
+    etcdDots.push(`<circle cx="${dx}" cy="${dy}" r="${dotR}" class="km-etcd-dot" opacity="${op}"/>`);
   }
 
   // 12 canonical animated paths & step definitions
   const stepMeta = [
-    { num: 1, stageId: "steps-1-6", title: "kubectl apply", sub: "sends manifest to kube-apiserver", x: 540, y: 46, stalled: 0 },
-    { num: 2, stageId: "steps-1-6", title: "{authn}", sub: "who are you?", x: 612, y: 242, stalled: 0 },
-    { num: 3, stageId: "steps-1-6", title: "{rbac-authz}", sub: "are you allowed?", x: 672, y: 266, stalled: 0 },
-    { num: 4, stageId: "steps-1-6", title: "{mutating-admission}", sub: "defaults & injected fields", x: 684, y: 320, stalled: 0 },
-    { num: 5, stageId: "steps-1-6", title: "{schema-validation}", sub: "is it valid as written?", x: 632, y: 372, stalled: 0 },
-    { num: 6, stageId: "steps-1-6", title: "etcd · cluster state", sub: "the Deployment is stored", x: 224, y: 175, stalled: 0 },
-    { num: 7, stageId: "steps-7-8", title: "{deployment-controller}", sub: "creates a ReplicaSet", x: 74, y: 230, stalled: 0 },
-    { num: 8, stageId: "steps-7-8", title: "{replicaset-controller}", sub: "creates Pods (no node yet)", x: 62, y: 278, stalled: step8Stalls.length },
-    { num: 9, stageId: "step-9", title: "kube-scheduler", sub: "filter → score → bind (Pod gets node)", x: 878, y: 215, stalled: step9Stalls.length },
-    { num: 10, stageId: "step-10", title: "kubelet · worker node", sub: "CSI → CNI → image pull → containerd", x: 292, y: 506, stalled: step10AllStalls.length },
-    { num: 11, stageId: "step-11", title: "{readiness-probe}", sub: "Pod is Ready", x: 432, y: 546, stalled: step11Stalls.length },
-    { num: 12, stageId: "step-12", title: "{endpointslice-controller}", sub: "adds Pod IP → kube-proxy routes traffic", x: 66, y: 382, stalled: step12Stalls.length },
+    { num: 1, compId: "kubectl-client", title: "kubectl apply", sub: "sends manifest to kube-apiserver", x: 540, y: 46, stalled: countForStep(1) },
+    { num: 2, compId: "kube-apiserver", title: "{authn}", sub: "who are you?", x: 612, y: 242, stalled: countForStep(2) },
+    { num: 3, compId: "kube-apiserver", title: "{rbac-authz}", sub: "are you allowed?", x: 672, y: 266, stalled: countForStep(3) },
+    { num: 4, compId: "kube-apiserver", title: "{mutating-admission}", sub: "defaults & injected fields", x: 684, y: 320, stalled: countForStep(4) },
+    { num: 5, compId: "kube-apiserver", title: "{schema-validation}", sub: "is it valid as written?", x: 632, y: 372, stalled: countForStep(5) },
+    { num: 6, compId: "etcd", title: "etcd · cluster state", sub: "the Deployment is stored", x: 148, y: 112, stalled: countForStep(6) },
+    { num: 7, compId: "kube-controller-manager", title: "{deployment-controller}", sub: "creates a ReplicaSet", x: 74, y: 230, stalled: countForStep(7) },
+    { num: 8, compId: "kube-controller-manager", title: "{replicaset-controller}", sub: "creates Pods (no node yet)", x: 62, y: 278, stalled: countForStep(8) },
+    { num: 9, compId: "kube-scheduler", title: "kube-scheduler", sub: "filter → score → bind (Pod gets node)", x: 878, y: 215, stalled: countForStep(9) },
+    { num: 10, compId: "kubelet-runtime", title: "kubelet · worker node", sub: "CSI → CNI → image pull → containerd", x: 292, y: 506, stalled: countForStep(10) },
+    { num: 11, compId: "kubelet-probes", title: "{readiness-probe}", sub: "Pod is Ready", x: 432, y: 546, stalled: countForStep(11) },
+    { num: 12, compId: "datapath-routing", title: "{endpointslice-controller}", sub: "adds Pod IP → kube-proxy routes traffic", x: 66, y: 382, stalled: countForStep(12) },
   ];
 
   // Bezier curves matching the exact radial flow of "The kubectl apply Machine" GIF
   const stepPaths = [
-    { num: 1, stageId: "steps-1-6", d: "M 540 46 Q 558 175 540 310", stalled: false },
-    { num: 2, stageId: "steps-1-6", d: "M 540 310 Q 576 268 612 242", stalled: false },
-    { num: 3, stageId: "steps-1-6", d: "M 612 242 Q 646 250 672 266", stalled: false },
-    { num: 4, stageId: "steps-1-6", d: "M 672 266 Q 684 292 684 320", stalled: false },
-    { num: 5, stageId: "steps-1-6", d: "M 684 320 Q 664 352 632 372 L 540 310", stalled: false },
-    { num: 6, stageId: "steps-1-6", d: "M 540 310 Q 370 250 200 145", stalled: false },
-    { num: 7, stageId: "steps-7-8", d: "M 540 310 Q 320 262 74 230", stalled: false },
-    { num: 8, stageId: "steps-7-8", d: "M 540 310 Q 310 296 62 278", stalled: step8Stalls.length > 0 },
-    { num: 9, stageId: "step-9",    d: "M 540 310 Q 705 236 878 215", stalled: step9Stalls.length > 0 },
-    { num: 10, stageId: "step-10",  d: "M 540 310 Q 430 432 292 506", stalled: step10AllStalls.length > 0 },
-    { num: 11, stageId: "step-11",  d: "M 292 506 Q 362 536 432 546 Q 468 424 540 310", stalled: step11Stalls.length > 0 },
-    { num: 12, stageId: "step-12",  d: "M 540 310 Q 310 348 66 382 M 540 310 Q 685 430 788 552", stalled: step12Stalls.length > 0 },
+    { num: 1, compId: "kubectl-client", d: "M 540 46 Q 558 175 540 310", stalled: countForStep(1) > 0 },
+    { num: 2, compId: "kube-apiserver", d: "M 540 310 Q 576 268 612 242", stalled: countForStep(2) > 0 },
+    { num: 3, compId: "kube-apiserver", d: "M 612 242 Q 646 250 672 266", stalled: countForStep(3) > 0 },
+    { num: 4, compId: "kube-apiserver", d: "M 672 266 Q 684 292 684 320", stalled: countForStep(4) > 0 },
+    { num: 5, compId: "kube-apiserver", d: "M 684 320 Q 664 352 632 372 L 540 310", stalled: countForStep(5) > 0 },
+    { num: 6, compId: "etcd", d: "M 540 310 Q 370 250 200 145", stalled: countForStep(6) > 0 },
+    { num: 7, compId: "kube-controller-manager", d: "M 540 310 Q 320 262 74 230", stalled: countForStep(7) > 0 },
+    { num: 8, compId: "kube-controller-manager", d: "M 540 310 Q 310 296 62 278", stalled: countForStep(8) > 0 },
+    { num: 9, compId: "kube-scheduler", d: "M 540 310 Q 705 236 878 215", stalled: countForStep(9) > 0 },
+    { num: 10, compId: "kubelet-runtime", d: "M 540 310 Q 430 432 292 506", stalled: countForStep(10) > 0 },
+    { num: 11, compId: "kubelet-probes", d: "M 292 506 Q 362 536 432 546 Q 468 424 540 310", stalled: countForStep(11) > 0 },
+    { num: 12, compId: "datapath-routing", d: "M 540 310 Q 310 348 66 382 M 540 310 Q 685 430 788 552", stalled: countForStep(12) > 0 },
   ];
+
+  const isStepHighlighted = (num, compId) =>
+    selectedStepNumber === num || (selectedK8sComponentId && selectedK8sComponentId === compId);
 
   const narratorEl = h("div", { className: "km-narrator" }, [
     h("div", { id: "km-narrator-text", style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap;" }, [
-      h("span", { style: "font-weight:800;color:#ff5630;font-family:var(--font-mono);" },
-        selectedPipelineStageId ? `FILTERED: ${selectedPipelineStageId.toUpperCase()}` : "LIVE 12-STEP CLUSTER TELEMETRY"),
-      h("span", { style: "color:#cbd5e1;" },
-        activeCauses.length
-          ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName} (${providerName}) — click any numbered step or stall card to filter root causes below.`
-          : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}.`)
+      h("span", { style: "font-weight:800;color:var(--km-accent-red);font-family:var(--font-mono);" },
+        data.simulated
+          ? "🧪 12-STEP SIMULATION DRILL ACTIVE"
+          : (selectedStepNumber ? `FILTERED: STEP ${selectedStepNumber}` : (selectedK8sComponentId ? `COMPONENT: ${selectedK8sComponentId.toUpperCase()}` : "LIVE 12-STEP CLUSTER TELEMETRY"))),
+      h("span", {},
+        data.simulated
+          ? `Simulating all 12 steps across kubectl, kube-apiserver, etcd, controller-manager, scheduler, kubelet, and EndpointSlice.${data._autoFallbackReason ? " (Live cluster offline — auto-loaded 12-Step Simulation Lab)" : ""}`
+          : (activeCauses.length
+              ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName} (${providerName}) — click any numbered step (1–12) or K8s component chip to filter.`
+              : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}.`))
     ]),
-    h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:#94a3b8;white-space:nowrap;" },
+    h("span", { style: "font-size:0.74rem;font-family:var(--font-mono);color:var(--km-muted-fg);white-space:nowrap;" },
       `${summary.workloads_healthy}/${summary.workloads_total} Workloads Ready`)
   ]);
 
@@ -2600,7 +2629,7 @@ function buildKubectlMachineInfographic(data) {
 
   const edgesHtml = stepPaths.map((p) => {
     const cls = p.stalled ? "is-stalled-edge" : "is-healthy-edge";
-    const selCls = selectedPipelineStageId === p.stageId ? " is-active-step" : "";
+    const selCls = isStepHighlighted(p.num, p.compId) ? " is-active-step" : "";
     return `
       <path id="km-glow-${p.num}" class="km-wire-glow ${cls}${selCls}" d="${p.d}" />
       <path id="km-flow-${p.num}" class="km-wire-flow ${cls}${selCls}" d="${p.d}" />
@@ -2609,32 +2638,36 @@ function buildKubectlMachineInfographic(data) {
 
   const stepBadgesHtml = stepMeta.map((s) => {
     const hasStall = s.stalled > 0;
-    const badgeColor = hasStall ? "#ff3b1d" : "#10b981";
-    const pulseHtml = hasStall
+    const isSel = isStepHighlighted(s.num, s.compId);
+    const badgeColor = isSel ? "#f59e0b" : (hasStall ? "#e11d48" : "#10b981");
+    const pulseHtml = (hasStall || isSel)
       ? `<circle cx="${s.x}" cy="${s.y}" r="12" class="km-pulse-circle" />`
       : "";
     return `
-      <g class="km-step-node" data-stage-id="${s.stageId}" data-step-num="${s.num}">
+      <g class="km-step-node" data-step-num="${s.num}" data-comp-id="${s.compId}">
+        <title>Step ${s.num}: ${s.title} (${s.stalled} stalled) — Click to filter</title>
         ${pulseHtml}
-        <circle cx="${s.x}" cy="${s.y}" r="11" fill="${badgeColor}" stroke="#ffffff" stroke-width="2" filter="url(#km-neon-glow)" />
+        <circle cx="${s.x}" cy="${s.y}" r="11.5" fill="${badgeColor}" stroke="#ffffff" stroke-width="2" filter="url(#km-neon-glow)" />
         <text x="${s.x}" y="${s.y + 3.8}" text-anchor="middle" fill="#ffffff" font-size="10.5" font-weight="800" font-family="monospace">${s.num}</text>
       </g>
     `;
   }).join("");
 
+  const hasAny10Stall = step10AllStalls.length > 0;
+
   svgContainer.innerHTML = `
     <svg class="km-svg" viewBox="0 0 1080 615" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <filter id="km-neon-glow" x="-40%" y="-40%" width="180%" height="180%">
-          <feGaussianBlur stdDeviation="3.5" result="blur" />
+          <feGaussianBlur stdDeviation="3.2" result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
         <radialGradient id="km-hub-grad" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.28" />
-          <stop offset="65%" stop-color="#ff4d2a" stop-opacity="0.12" />
+          <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22" />
+          <stop offset="65%" stop-color="#ff4d2a" stop-opacity="0.09" />
           <stop offset="100%" stop-color="#090d16" stop-opacity="0" />
         </radialGradient>
       </defs>
@@ -2664,89 +2697,89 @@ function buildKubectlMachineInfographic(data) {
 
       <!-- Step 6: etcd · cluster state particle sphere (Top-Left) -->
       <g>
-        <circle cx="200" cy="145" r="50" fill="none" stroke="rgba(148,163,184,0.18)" stroke-dasharray="3 3" />
+        <circle cx="200" cy="145" r="50" fill="none" stroke="var(--km-wire-bg)" stroke-dasharray="3 3" />
         ${etcdDots.join("")}
-        <circle cx="148" cy="112" r="9" fill="#ff3b1d" stroke="#fff" stroke-width="1.5" />
-        <text x="148" y="115.5" text-anchor="middle" fill="#fff" font-size="9.5" font-weight="800" font-family="monospace">6</text>
-        <text x="200" y="214" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="800" font-family="monospace">etcd · cluster state</text>
-        <text x="200" y="230" text-anchor="middle" fill="#94a3b8" font-size="10.5" font-family="monospace">the Deployment is stored (${summary.workloads_total} workloads)</text>
+        <text x="200" y="214" text-anchor="middle" class="km-svg-title" font-size="13">etcd · cluster state</text>
+        <text x="200" y="230" text-anchor="middle" class="${countForStep(6) ? "km-svg-alert" : "km-svg-sub"}" font-size="10.5">
+          the Deployment is stored (${summary.workloads_total} workloads)
+        </text>
       </g>
 
-      <!-- Satellite context nodes (Argo CD, Helm, Prometheus, HPA, Karpenter, CoreDNS, etc.) -->
-      <g fill="#7e8fa6" font-size="10.5" font-family="monospace">
-        <text x="415" y="81" text-anchor="end">{~/.kube/config} ●</text>
-        <text x="666" y="81">● {server-side-apply}</text>
-        <text x="395" y="131">◈ Argo CD</text>
-        <text x="772" y="161">◈ Helm</text>
-        <text x="946" y="115">◈ Prometheus</text>
+      <!-- Satellite context nodes & labels (theme-aware via CSS classes) -->
+      <g font-size="10.5">
+        <text x="415" y="81" text-anchor="end" class="km-svg-sat">{~/.kube/config} ●</text>
+        <text x="666" y="81" class="km-svg-sat">● {server-side-apply}</text>
+        <text x="395" y="131" class="km-svg-sat">◈ Argo CD</text>
+        <text x="772" y="161" class="km-svg-sat">◈ Helm</text>
+        <text x="946" y="115" class="km-svg-sat">◈ Prometheus</text>
 
         <!-- kube-scheduler satellites (Step 9) -->
-        <text x="952" y="179">● {filter}</text>
-        <text x="972" y="215">● {score}</text>
-        <text x="945" y="261">● {bind}</text>
-        <text x="878" y="245" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="800">kube-scheduler</text>
-        <text x="878" y="261" text-anchor="middle" fill="${step9Stalls.length ? "#ff5630" : "#94a3b8"}" font-size="10.5">
+        <text x="952" y="179" class="km-svg-sat">● {filter}</text>
+        <text x="972" y="215" class="km-svg-sat">● {score}</text>
+        <text x="945" y="261" class="km-svg-sat">● {bind}</text>
+        <text x="878" y="245" text-anchor="middle" class="km-svg-title" font-size="13">kube-scheduler</text>
+        <text x="878" y="261" text-anchor="middle" class="${step9Stalls.length ? "km-svg-alert" : "km-svg-sub"}" font-size="10.5">
           filter → score → bind ${step9Stalls.length ? `(${step9Stalls.length} Pending!)` : "(Pod gets a node)"}
         </text>
 
         <!-- kube-controller-manager & satellites (Mid-Left) -->
-        <circle cx="335" cy="295" r="9" fill="#0f172a" stroke="#64748b" stroke-width="2" />
-        <text x="335" y="317" text-anchor="middle" fill="#cbd5e1" font-size="12" font-weight="700">kube-controller-manager</text>
-        <text x="88" y="227" fill="#e2e8f0" font-weight="700">{deployment-controller}</text>
-        <text x="88" y="241" fill="#94a3b8">creates a ReplicaSet</text>
-        <text x="76" y="275" fill="#e2e8f0" font-weight="700">{replicaset-controller}</text>
-        <text x="76" y="289" fill="#94a3b8">creates Pods (no node yet)</text>
-        <text x="178" y="335" text-anchor="end">● {namespace-controller}</text>
-        <text x="458" y="352" text-anchor="end">{pod-security} ●</text>
-        <text x="458" y="365" text-anchor="end" fill="#64748b" font-size="9.5">enforced at step 8</text>
-        <text x="80" y="380" fill="#e2e8f0" font-weight="700">{endpointslice-controller}</text>
-        <text x="80" y="394" fill="${step12Stalls.length ? "#ff5630" : "#94a3b8"}">adds Pod IP → kube-proxy routes traffic</text>
-        <text x="80" y="407" fill="#64748b" font-size="9.5">(only if a Service selects the Pod)</text>
-        <text x="188" y="426" text-anchor="end">● {node-controller}</text>
-        <text x="148" y="453" text-anchor="end">● {job-controller}</text>
+        <circle cx="335" cy="295" r="9" class="km-svg-hub-inner" />
+        <text x="335" y="317" text-anchor="middle" class="km-svg-label" font-size="12">kube-controller-manager</text>
+        <text x="88" y="227" class="${countForStep(7) ? "km-svg-alert" : "km-svg-label"}">{deployment-controller}</text>
+        <text x="88" y="241" class="km-svg-sub">creates a ReplicaSet</text>
+        <text x="76" y="275" class="${step8Stalls.length ? "km-svg-alert" : "km-svg-label"}">{replicaset-controller}</text>
+        <text x="76" y="289" class="km-svg-sub">creates Pods (no node yet)</text>
+        <text x="178" y="335" text-anchor="end" class="km-svg-sat">● {namespace-controller}</text>
+        <text x="458" y="352" text-anchor="end" class="km-svg-sat">{pod-security} ●</text>
+        <text x="458" y="365" text-anchor="end" class="km-svg-note" font-size="9.5">enforced at step 8</text>
+        <text x="80" y="380" class="${step12Stalls.length ? "km-svg-alert" : "km-svg-label"}">{endpointslice-controller}</text>
+        <text x="80" y="394" class="${step12Stalls.length ? "km-svg-alert" : "km-svg-sub"}">adds Pod IP → kube-proxy routes traffic</text>
+        <text x="80" y="407" class="km-svg-note" font-size="9.5">(only if a Service selects the Pod)</text>
+        <text x="188" y="426" text-anchor="end" class="km-svg-sat">● {node-controller}</text>
+        <text x="148" y="453" text-anchor="end" class="km-svg-sat">● {job-controller}</text>
 
         <!-- Step 1-5 labels around kube-apiserver -->
-        <text x="540" y="26" text-anchor="middle" fill="#ffffff" font-size="13.5" font-weight="800">kubectl</text>
-        <text x="552" y="132" fill="#94a3b8">sends the manifest to kube-apiserver</text>
-        <text x="626" y="238" fill="#e2e8f0" font-weight="700">{authn}</text>
-        <text x="626" y="251" fill="#94a3b8">who are you?</text>
-        <text x="688" y="264" fill="#e2e8f0" font-weight="700">{rbac-authz}</text>
-        <text x="688" y="277" fill="#94a3b8">are you allowed?</text>
-        <text x="700" y="317" fill="#e2e8f0" font-weight="700">{mutating-admission}</text>
-        <text x="700" y="330" fill="#94a3b8">defaults and injected fields</text>
-        <text x="646" y="369" fill="#e2e8f0" font-weight="700">{schema-validation}</text>
-        <text x="646" y="382" fill="#94a3b8">is it allowed as written?</text>
-        <text x="530" y="398" text-anchor="middle" fill="#cbd5e1">{validating-admission}</text>
+        <text x="540" y="26" text-anchor="middle" class="km-svg-title" font-size="13.5">kubectl</text>
+        <text x="552" y="132" class="km-svg-sub">sends the manifest to kube-apiserver</text>
+        <text x="626" y="238" class="${countForStep(2) ? "km-svg-alert" : "km-svg-label"}">{authn}</text>
+        <text x="626" y="251" class="km-svg-sub">who are you?</text>
+        <text x="688" y="264" class="${countForStep(3) ? "km-svg-alert" : "km-svg-label"}">{rbac-authz}</text>
+        <text x="688" y="277" class="km-svg-sub">are you allowed?</text>
+        <text x="700" y="317" class="${countForStep(4) ? "km-svg-alert" : "km-svg-label"}">{mutating-admission}</text>
+        <text x="700" y="330" class="km-svg-sub">defaults and injected fields</text>
+        <text x="646" y="369" class="${countForStep(5) ? "km-svg-alert" : "km-svg-label"}">{schema-validation}</text>
+        <text x="646" y="382" class="km-svg-sub">is it allowed as written?</text>
+        <text x="530" y="398" text-anchor="middle" class="km-svg-sat">{validating-admission}</text>
 
         <!-- Bottom-Left: kubelet · worker node (Step 10 & Step 11) -->
-        <text x="160" y="478" text-anchor="end" fill="${step10aStalls.length ? "#ff5630" : "#cbd5e1"}" font-weight="${step10aStalls.length ? "800" : "400"}">● {csi-mount}${step10aStalls.length ? " [!]" : ""}</text>
-        <text x="140" y="518" text-anchor="end" fill="${step10bStalls.length ? "#ff5630" : "#cbd5e1"}">● {cni-sandbox}</text>
-        <text x="180" y="555" text-anchor="end" fill="${step10cStalls.length ? "#ff5630" : "#cbd5e1"}" font-weight="${step10cStalls.length ? "800" : "400"}">● {image-pull}${step10cStalls.length ? " [!]" : ""}</text>
-        <text x="312" y="576" text-anchor="middle" fill="${step10dStalls.length ? "#ff5630" : "#cbd5e1"}" font-weight="${step10dStalls.length ? "800" : "400"}">● {containerd}${step10dStalls.length ? " [!]" : ""}</text>
-        <text x="425" y="476">● {init-containers}</text>
-        <text x="448" y="508">● {startup-probe}</text>
-        <text x="448" y="545" fill="${step11Stalls.length ? "#ff5630" : "#e2e8f0"}" font-weight="700">{readiness-probe}</text>
-        <text x="448" y="558" fill="${step11Stalls.length ? "#ff5630" : "#94a3b8"}">${step11Stalls.length ? "0/1 Ready (Probe Failing!)" : "Pod is Ready"}</text>
+        <text x="160" y="478" text-anchor="end" class="${(step10aStalls.length || hasAny10Stall) ? "km-svg-alert" : "km-svg-sat"}">● {csi-mount}${step10aStalls.length ? " [!]" : ""}</text>
+        <text x="140" y="518" text-anchor="end" class="${step10bStalls.length ? "km-svg-alert" : "km-svg-sat"}">● {cni-sandbox}</text>
+        <text x="180" y="555" text-anchor="end" class="${(step10cStalls.length || hasAny10Stall) ? "km-svg-alert" : "km-svg-sat"}">● {image-pull}${step10cStalls.length ? " [!]" : ""}</text>
+        <text x="312" y="576" text-anchor="middle" class="${(step10dStalls.length || hasAny10Stall) ? "km-svg-alert" : "km-svg-sat"}">● {containerd}${step10dStalls.length ? " [!]" : ""}</text>
+        <text x="425" y="476" class="km-svg-sat">● {init-containers}</text>
+        <text x="448" y="508" class="km-svg-sat">● {startup-probe}</text>
+        <text x="448" y="545" class="${step11Stalls.length ? "km-svg-alert" : "km-svg-label"}">{readiness-probe}</text>
+        <text x="448" y="558" class="${step11Stalls.length ? "km-svg-alert" : "km-svg-sub"}">${step11Stalls.length ? "0/1 Ready (Probe Failing!)" : "Pod is Ready"}</text>
 
-        <text x="292" y="534" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="800">kubelet · worker node</text>
-        <text x="292" y="598" text-anchor="middle" fill="#94a3b8" font-size="10.5">mount volumes (CSI) → sandbox + network (CNI) → pull image → start containers</text>
+        <text x="292" y="534" text-anchor="middle" class="km-svg-title" font-size="13">kubelet · worker node</text>
+        <text x="292" y="598" text-anchor="middle" class="km-svg-sub" font-size="10.5">mount volumes (CSI) → sandbox + network (CNI) → pull image → start containers</text>
 
         <!-- Bottom-Right: Service, EndpointSlice, kube-proxy, HPA, Karpenter, CoreDNS -->
-        <text x="942" y="373">HPA ◈</text>
-        <text x="748" y="435">Karpenter / cluster-autoscaler ◈</text>
-        <text x="612" y="458">◈ cert-manager</text>
-        <text x="745" y="495" fill="${step12Stalls.length ? "#ff5630" : "#cbd5e1"}">● EndpointSlice</text>
-        <text x="898" y="495">CoreDNS ●</text>
-        <text x="845" y="528" fill="${step12Stalls.length ? "#ff5630" : "#cbd5e1"}">● Service</text>
-        <circle cx="788" cy="552" r="6" fill="${step12Stalls.length ? "#ff3b1d" : "#10b981"}" filter="url(#km-neon-glow)" />
-        <text x="802" y="556" fill="#e2e8f0" font-weight="700">kube-proxy (or eBPF CNI)</text>
+        <text x="942" y="373" class="km-svg-sat">HPA ◈</text>
+        <text x="748" y="435" class="km-svg-sat">Karpenter / cluster-autoscaler ◈</text>
+        <text x="612" y="458" class="km-svg-sat">◈ cert-manager</text>
+        <text x="745" y="495" class="${step12Stalls.length ? "km-svg-alert" : "km-svg-sat"}">● EndpointSlice</text>
+        <text x="898" y="495" class="km-svg-sat">CoreDNS ●</text>
+        <text x="845" y="528" class="${step12Stalls.length ? "km-svg-alert" : "km-svg-sat"}">● Service</text>
+        <circle cx="788" cy="552" r="6" fill="${step12Stalls.length ? "#e11d48" : "#10b981"}" filter="url(#km-neon-glow)" />
+        <text x="802" y="556" class="km-svg-label">kube-proxy (or eBPF CNI)</text>
       </g>
 
       <!-- CENTER HUB: kube-apiserver -->
       <g>
-        <circle cx="540" cy="310" r="32" fill="#090d16" stroke="rgba(56,189,248,0.35)" stroke-width="1.5" />
-        <circle cx="540" cy="310" r="24" fill="#0d1526" stroke="#e2e8f0" stroke-width="2.2" filter="url(#km-neon-glow)" />
-        <text x="540" y="356" text-anchor="middle" fill="#ffffff" font-size="14.5" font-weight="800" font-family="monospace">kube-apiserver</text>
+        <circle cx="540" cy="310" r="32" class="km-svg-hub-outer" />
+        <circle cx="540" cy="310" r="24" class="km-svg-hub-inner" filter="url(#km-neon-glow)" />
+        <text x="540" y="356" text-anchor="middle" class="km-svg-title" font-size="14.5">kube-apiserver</text>
       </g>
 
       <!-- Numbered Step Badges (1..12) -->
@@ -2754,14 +2787,29 @@ function buildKubectlMachineInfographic(data) {
     </svg>
   `;
 
-  // Wire up interactive click on SVG step nodes
+  // Wire up interactive click on SVG step nodes (filters by exact step number 1..12)
   svgContainer.querySelectorAll(".km-step-node").forEach((nodeEl) => {
     nodeEl.addEventListener("click", () => {
-      const stgId = nodeEl.getAttribute("data-stage-id");
-      selectedPipelineStageId = selectedPipelineStageId === stgId ? null : stgId;
+      const sNum = Number(nodeEl.getAttribute("data-step-num"));
+      selectedStepNumber = selectedStepNumber === sNum ? null : sNum;
+      selectedPipelineStageId = null;
       renderDiagnosticsRCA(data);
     });
   });
+
+  // Toggle button: Simulate All 12 Steps (Chaos Drill Mode)
+  const simToggleBtn = h("button", {
+    type: "button",
+    className: `km-btn ${simulateAll12Steps ? "km-btn--sim-on" : ""}`,
+    title: "Toggle simulated failures across all 12 steps (Steps 1 through 12)",
+    onclick: () => {
+      simulateAll12Steps = !simulateAll12Steps;
+      selectedStepNumber = null;
+      selectedK8sComponentId = null;
+      selectedPipelineStageId = null;
+      loadDiagnosticsRCA();
+    }
+  }, simulateAll12Steps ? "🧪 Simulate All 12 Steps: ON" : "🧪 Simulate All 12 Steps");
 
   // Animated 12-Step Sequencer ("▶ Replay 12-Step Flow")
   const playBtn = h("button", {
@@ -2787,10 +2835,10 @@ function buildKubectlMachineInfographic(data) {
         const narText = $("km-narrator-text");
         if (meta && narText) {
           narText.innerHTML = `
-            <span style="font-weight:800;color:#fbbf24;font-family:var(--font-mono);">STEP ${meta.num} OF 12 · ${escapeHtml(meta.title.toUpperCase())}</span>
-            <span style="color:#f0f6fc;">${escapeHtml(meta.sub)}</span>
-            <span style="font-family:var(--font-mono);font-size:0.75rem;padding:2px 8px;border-radius:99px;background:${meta.stalled ? "rgba(255,59,29,0.2)" : "rgba(16,185,129,0.2)"};color:${meta.stalled ? "#ff5630" : "#34d399"};">
-              ${meta.stalled ? `⚠ ${meta.stalled} STALLED IN CLUSTER` : "✓ PASSING IN CLUSTER"}
+            <span style="font-weight:800;color:var(--km-accent-amber);font-family:var(--font-mono);">STEP ${meta.num} OF 12 · ${escapeHtml(meta.title.toUpperCase())}</span>
+            <span>${escapeHtml(meta.sub)}</span>
+            <span style="font-family:var(--font-mono);font-size:0.75rem;padding:2px 8px;border-radius:99px;background:${meta.stalled ? "rgba(225,29,72,0.16)" : "rgba(16,185,129,0.16)"};color:${meta.stalled ? "var(--km-accent-red)" : "var(--km-accent-green)"};">
+              ${meta.stalled ? `⚠ ${meta.stalled} STALLED` : "✓ PASSING"}
             </span>
           `;
         }
@@ -2806,62 +2854,81 @@ function buildKubectlMachineInfographic(data) {
           return;
         }
         highlightStep(currentStep);
-      }, 1250);
+      }, 1200);
     }
   }, "▶ Replay 12-Step Flow");
 
-  const resetFilterBtn = selectedPipelineStageId ? h("button", {
+  const hasAnyFilter = Boolean(selectedPipelineStageId || selectedStepNumber || selectedK8sComponentId || selectedRcaKindFilter !== "all" || rcaSearchQuery);
+  const resetFilterBtn = hasAnyFilter ? h("button", {
     type: "button",
     className: "km-btn",
     onclick: () => {
       selectedPipelineStageId = null;
+      selectedStepNumber = null;
+      selectedK8sComponentId = null;
+      selectedRcaKindFilter = "all";
+      rcaSearchQuery = "";
       renderDiagnosticsRCA(data);
     }
-  }, "✕ Clear Stage Filter") : null;
+  }, "✕ Reset Filters") : null;
 
-  // Bottom-Right "Where it stalls" items bound to live cluster counts
+  // Bottom-Right "Where it stalls" items bound to cluster counts
   const stallCategories = [
     {
       icon: "◷",
       label: "Pending",
       stepText: "→ scheduler (step 9)",
-      stageId: "step-9",
+      stepNum: 9,
       matches: step9Stalls,
     },
     {
       icon: "⬡",
       label: "ContainerCreating",
-      stepText: "→ CSI / CNI (step 10a/b)",
-      stageId: "step-10",
-      matches: [...step10aStalls, ...step10bStalls],
+      stepText: "→ CSI / CNI (step 10)",
+      stepNum: 10,
+      matches: [...step10aStalls, ...step10bStalls, ...(step10aStalls.length === 0 ? step10AllStalls : [])],
     },
     {
       icon: "↓",
       label: "ImagePullBackOff",
-      stepText: "→ image pull (step 10c)",
-      stageId: "step-10",
-      matches: step10cStalls,
-    },
-    {
-      icon: "⚡",
-      label: "CrashLoop / OOMKilled",
-      stepText: "→ containerd (step 10d)",
-      stageId: "step-10",
-      matches: step10dStalls,
+      stepText: "→ image pull (step 10)",
+      stepNum: 10,
+      matches: step10cStalls.length ? step10cStalls : step10AllStalls,
     },
     {
       icon: "∿",
       label: "0/1 Ready",
       stepText: "→ readiness probe (step 11)",
-      stageId: "step-11",
+      stepNum: 11,
       matches: step11Stalls,
     },
     {
       icon: "⊘",
-      label: "503 from Ingress / Service",
+      label: "503 from Ingress",
       stepText: "→ no ready endpoints (step 12)",
-      stageId: "step-12",
+      stepNum: 12,
       matches: step12Stalls,
+    },
+    {
+      icon: "🔒",
+      label: "Forbidden",
+      stepText: "→ RBAC (3) or PodSecurity (8)",
+      stepNum: countForStep(3) > 0 ? 3 : 8,
+      matches: [...activeCauses.filter((r) => Number(r.step_number) === 3), ...step8Stalls],
+    },
+    {
+      icon: "⊗",
+      label: "Admission Webhook Denied",
+      stepText: "→ mutating/validating (step 4–5)",
+      stepNum: countForStep(5) > 0 ? 5 : 4,
+      matches: activeCauses.filter((r) => Number(r.step_number) === 4 || Number(r.step_number) === 5),
+    },
+    {
+      icon: "⚡",
+      label: "CrashLoop / OOMKilled",
+      stepText: "→ containerd runtime (step 10)",
+      stepNum: 10,
+      matches: step10dStalls.length ? step10dStalls : step10AllStalls,
     },
   ];
 
@@ -2870,7 +2937,8 @@ function buildKubectlMachineInfographic(data) {
     h("div", { className: "km-box" }, [
       h("div", { className: "km-box__title" }, [
         h("span", {}, "The machine in numbers"),
-        h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:#38bdf8;" }, clusterName)
+        h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--km-accent-cyan);" },
+          data.simulated ? `${clusterName} (12-Step Sim)` : clusterName)
       ]),
       h("div", { className: "km-num-hero" }, [
         h("span", { className: "km-num-hero__big" }, "12"),
@@ -2879,43 +2947,44 @@ function buildKubectlMachineInfographic(data) {
       h("div", { className: "km-num-row" }, [h("span", {}, "Components that talk to etcd"), h("strong", {}, "1 (kube-apiserver)")]),
       h("div", { className: "km-num-row" }, [h("span", {}, "Controllers on the path"), h("strong", {}, "3 (Deploy → RS → EndpointSlice)")]),
       h("div", { className: "km-num-row" }, [h("span", {}, "Checks before storage"), h("strong", {}, "4 (Authn, RBAC, Mutating, Validating)")]),
-      h("div", { className: "km-num-row" }, [h("span", {}, "Workloads Healthy / Total"), h("strong", { style: "color:#34d399;" }, `${summary.workloads_healthy} / ${summary.workloads_total}`)]),
+      h("div", { className: "km-num-row" }, [h("span", {}, "Things that watch the API server"), h("strong", {}, "all of them")]),
       h("div", { className: "km-num-row" }, [
-        h("span", {}, "Active Pipeline Stalls Detected"),
-        h("strong", { style: `color:${activeCauses.length ? "#ff5630" : "#34d399"};` }, `${activeCauses.length} active`)
+        h("span", {}, "Active Pipeline Stalls"),
+        h("strong", { style: `color:${activeCauses.length ? "var(--km-accent-red)" : "var(--km-accent-green)"};` }, `${activeCauses.length} active`)
       ]),
     ]),
 
-    // Right Box: Where it stalls (interactive live telemetry)
+    // Right Box: Where it stalls
     h("div", { className: "km-box" }, [
       h("div", { className: "km-box__title" }, [
-        h("span", {}, "Where it stalls (Live Cluster Detection)"),
-        h("span", { style: "font-size:0.7rem;font-family:var(--font-mono);color:#94a3b8;" }, "Click any stall point to filter RCA cards")
+        h("span", {}, "Where it stalls"),
+        h("span", { style: "font-size:0.7rem;font-family:var(--font-mono);color:var(--km-muted-fg);" }, "Click any stall point to filter RCA cards")
       ]),
       h("div", { className: "km-stalls-grid" }, stallCategories.map((sc) => {
         const count = sc.matches.length;
-        const isSel = selectedPipelineStageId === sc.stageId;
+        const isSel = selectedStepNumber === sc.stepNum;
         const sampleNames = sc.matches.flatMap((m) => m.folded_failures || []).slice(0, 2).join(", ");
         return h("button", {
           type: "button",
           className: `km-stall-item ${count > 0 ? "has-stall" : ""} ${isSel ? "is-active" : ""}`,
           onclick: () => {
-            selectedPipelineStageId = isSel ? null : sc.stageId;
+            selectedStepNumber = isSel ? null : sc.stepNum;
+            selectedPipelineStageId = null;
             renderDiagnosticsRCA(data);
           }
         }, [
           h("div", { style: "display:flex;align-items:center;justify-content:space-between;width:100%;gap:6px;" }, [
-            h("span", { style: "font-size:0.8rem;font-weight:800;color:#ffffff;display:flex;align-items:center;gap:6px;" }, [
-              h("span", { style: `color:${count > 0 ? "#ff4d2a" : "#34d399"};` }, sc.icon),
+            h("span", { style: "font-size:0.79rem;font-weight:800;color:var(--km-title-fg);display:flex;align-items:center;gap:6px;" }, [
+              h("span", { style: `color:${count > 0 ? "var(--km-accent-red)" : "var(--km-accent-green)"};` }, sc.icon),
               sc.label
             ]),
             h("span", {
-              style: `font-size:0.68rem;font-weight:800;padding:1px 7px;border-radius:99px;background:${count > 0 ? "rgba(255,77,42,0.22)" : "rgba(16,185,129,0.14)"};color:${count > 0 ? "#ff6242" : "#34d399"};`
-            }, count > 0 ? `${count} stalled` : "0 stalled")
+              style: `font-size:0.67rem;font-weight:800;padding:1px 7px;border-radius:99px;background:${count > 0 ? "rgba(225,29,72,0.16)" : "rgba(16,185,129,0.14)"};color:${count > 0 ? "var(--km-accent-red)" : "var(--km-accent-green)"};`
+            }, count > 0 ? `${count} stalled` : "✓ OK")
           ]),
-          h("div", { style: "font-size:0.73rem;color:#9fb0c7;" }, sc.stepText),
+          h("div", { style: "font-size:0.72rem;color:var(--km-muted-fg);" }, sc.stepText),
           count > 0 && sampleNames
-            ? h("div", { style: "font-size:0.68rem;color:#fca5a5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;" }, `↳ ${sampleNames}`)
+            ? h("div", { style: "font-size:0.67rem;color:var(--km-stall-sample-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;" }, `↳ ${sampleNames}`)
             : null,
         ].filter(Boolean));
       }))
@@ -2928,7 +2997,7 @@ function buildKubectlMachineInfographic(data) {
         h("div", { className: "km-shell__tag" }, [
           h("span", {}, "∞ KUBEORBIT 360°"),
           h("span", { style: "opacity:0.6;" }, "·"),
-          h("span", {}, `LIVE ${providerName} CONTROL & DATA PLANE`)
+          h("span", {}, data.simulated ? "12-STEP CHAOS SIMULATION LAB" : `LIVE ${providerName} CONTROL & DATA PLANE`)
         ]),
         h("h2", { className: "km-shell__title" }, [
           "The ",
@@ -2937,10 +3006,11 @@ function buildKubectlMachineInfographic(data) {
           h("span", {}, ".")
         ]),
         h("div", { className: "km-shell__subtitle" },
-          `Active Cluster: ${clusterName} · Click any numbered node (1–12) or stall card to inspect root causes`)
+          `Cluster: ${clusterName} · Click any numbered node (1–12), stall card, or K8s component chip below to filter`)
       ]),
       h("div", { className: "km-controls" }, [
         resetFilterBtn,
+        simToggleBtn,
         playBtn,
       ].filter(Boolean))
     ]),
@@ -2948,8 +3018,130 @@ function buildKubectlMachineInfographic(data) {
     svgContainer,
     bottomGrid,
     h("div", { className: "km-footer-caption" }, [
-      h("span", {}, "KUBEORBIT LIVE CLUSTER TELEMETRY · 12-STEP RUNBOOK ENGINE"),
+      h("span", {}, "KUBEORBIT 12-STEP RUNBOOK ENGINE · DARK & LIGHT THEME ADAPTIVE"),
       h("span", {}, "NOTHING TALKS TO ANYTHING. EVERYTHING TALKS TO THE API SERVER.")
+    ])
+  ]);
+}
+
+function buildRCAFilterPanel(data) {
+  const allRootCauses = data.root_causes || [];
+  const components = data.components || [
+    { component_id: "kubectl-client", label: "kubectl · Client", step_range: "Step 1" },
+    { component_id: "kube-apiserver", label: "kube-apiserver", step_range: "Steps 2–5" },
+    { component_id: "etcd", label: "etcd · State", step_range: "Step 6" },
+    { component_id: "kube-controller-manager", label: "kube-controller-manager", step_range: "Steps 7–8" },
+    { component_id: "kube-scheduler", label: "kube-scheduler", step_range: "Step 9" },
+    { component_id: "kubelet-runtime", label: "kubelet · CSI / CNI / Runtime", step_range: "Step 10" },
+    { component_id: "kubelet-probes", label: "kubelet · Probes", step_range: "Step 11" },
+    { component_id: "datapath-routing", label: "EndpointSlice & kube-proxy", step_range: "Step 12" },
+  ];
+
+  // Row 1: Filter by Kubernetes Component
+  const allCompBtn = h("button", {
+    type: "button",
+    className: `rca-comp-chip ${!selectedK8sComponentId ? "is-active" : ""}`,
+    onclick: () => {
+      selectedK8sComponentId = null;
+      renderDiagnosticsRCA(data);
+    }
+  }, [
+    h("span", {}, "All K8s Components"),
+    h("span", {
+      className: "rca-comp-chip__badge",
+      style: "background:var(--bg-elevated);color:var(--fg);"
+    }, String(allRootCauses.length))
+  ]);
+
+  const compButtons = components.map((c) => {
+    const cid = c.component_id;
+    const matching = allRootCauses.filter((r) => r.component_id === cid);
+    const activeFailCount = matching.filter((r) => r.kind === "active_failure").length;
+    const isSel = selectedK8sComponentId === cid;
+
+    return h("button", {
+      type: "button",
+      className: `rca-comp-chip ${isSel ? "is-active" : ""}`,
+      title: `${c.label} (${c.step_range})`,
+      onclick: () => {
+        selectedK8sComponentId = isSel ? null : cid;
+        selectedStepNumber = null;
+        renderDiagnosticsRCA(data);
+      }
+    }, [
+      h("span", {}, c.label),
+      h("span", { style: "font-size:0.66rem;opacity:0.75;" }, `(${c.step_range})`),
+      h("span", {
+        className: "rca-comp-chip__badge",
+        style: activeFailCount > 0
+          ? "background:rgba(217,48,37,0.16);color:var(--danger);"
+          : (matching.length > 0 ? "background:rgba(245,158,11,0.16);color:var(--warning);" : "background:rgba(16,185,129,0.14);color:var(--success);")
+      }, activeFailCount > 0 ? `${activeFailCount} stalled` : (matching.length > 0 ? `${matching.length}` : "✓"))
+    ]);
+  });
+
+  // Row 2: Filter by Individual Step (1..12) + Kind Filter + Search Input
+  const stepPills = [
+    h("button", {
+      type: "button",
+      className: `rca-step-pill ${!selectedStepNumber ? "is-active" : ""}`,
+      onclick: () => {
+        selectedStepNumber = null;
+        renderDiagnosticsRCA(data);
+      }
+    }, "All 12 Steps"),
+    ...Array.from({ length: 12 }, (_, idx) => {
+      const sNum = idx + 1;
+      const sCount = allRootCauses.filter((r) => Number(r.step_number) === sNum && r.kind === "active_failure").length;
+      const isSel = selectedStepNumber === sNum;
+      return h("button", {
+        type: "button",
+        className: `rca-step-pill ${sCount > 0 ? "has-stall" : ""} ${isSel ? "is-active" : ""}`,
+        onclick: () => {
+          selectedStepNumber = isSel ? null : sNum;
+          renderDiagnosticsRCA(data);
+        }
+      }, `Step ${sNum}${sCount > 0 ? ` (${sCount})` : ""}`);
+    })
+  ];
+
+  const kindTabs = [
+    ["all", `All Findings (${allRootCauses.length})`],
+    ["active_failure", `Active Stalls (${allRootCauses.filter((r) => r.kind === "active_failure").length})`],
+    ["best_practice", `Best Practices (${allRootCauses.filter((r) => r.kind === "best_practice").length})`],
+  ].map(([k, label]) =>
+    h("button", {
+      type: "button",
+      className: `rca-step-pill ${selectedRcaKindFilter === k ? "is-active" : ""}`,
+      onclick: () => {
+        selectedRcaKindFilter = k;
+        renderDiagnosticsRCA(data);
+      }
+    }, label)
+  );
+
+  const searchInput = h("input", {
+    type: "text",
+    className: "input",
+    placeholder: "Search findings by pod, service, step, or component…",
+    value: rcaSearchQuery,
+    style: "min-width:240px;padding:6px 11px;font-size:0.78rem;border-radius:8px;border:1px solid var(--border);background:var(--bg-inset);color:var(--fg);",
+    onInput: (e) => {
+      rcaSearchQuery = e.target.value;
+      renderDiagnosticsRCA(data);
+    }
+  });
+
+  return h("div", { className: "rca-filter-panel" }, [
+    h("div", { style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;" }, [
+      h("span", { style: "font-size:0.74rem;font-weight:800;color:var(--fg-muted);text-transform:uppercase;letter-spacing:0.05em;" },
+        "Filter by Kubernetes Control / Data Plane Component"),
+      searchInput,
+    ]),
+    h("div", { className: "rca-comp-chips" }, [allCompBtn, ...compButtons]),
+    h("div", { style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-top:6px;border-top:1px solid var(--border);" }, [
+      h("div", { className: "rca-step-strip" }, stepPills),
+      h("div", { className: "rca-step-strip" }, kindTabs),
     ])
   ]);
 }
@@ -2962,19 +3154,30 @@ function renderDiagnosticsRCA(data) {
   const stats = statGrid([
     statCard("Cluster Health Score", `${summary.overall_score}%`, [pill(summary.overall_score >= 80 ? "Healthy" : "Anomalies Detected", summary.overall_score >= 80 ? "healthy" : "critical")], STAT_ICONS.pulse),
     statCard("Folded Root Causes", summary.active_root_causes, [pill(`${allRootCauses.reduce((acc, r) => acc + (r.folded_failures?.length || 1), 0)} Raw Symptoms Folded`, "info")], STAT_ICONS.funnel),
-    statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`, null, STAT_ICONS.shieldCheck),
+    statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`, data.simulated ? [pill("12-Step Simulation Lab", "warning")] : null, STAT_ICONS.shieldCheck),
   ]);
 
   const machineInfographic = buildKubectlMachineInfographic(data);
+  const filterPanel = buildRCAFilterPanel(data);
 
-  const rootCauses = selectedPipelineStageId
-    ? allRootCauses.filter((r) => r.stage_id === selectedPipelineStageId)
-    : allRootCauses;
+  const q = rcaSearchQuery.toLowerCase().trim();
+  const rootCauses = allRootCauses.filter((r) => {
+    if (selectedPipelineStageId && r.stage_id !== selectedPipelineStageId) return false;
+    if (selectedStepNumber && Number(r.step_number) !== selectedStepNumber) return false;
+    if (selectedK8sComponentId && r.component_id !== selectedK8sComponentId) return false;
+    if (selectedRcaKindFilter !== "all" && r.kind !== selectedRcaKindFilter) return false;
+    if (q) {
+      const hay = `${r.title || ""} ${r.summary || ""} ${r.step_badge || ""} ${r.component || ""} ${r.namespace || ""} ${(r.folded_failures || []).join(" ")}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 
   if (!rootCauses.length) {
+    const hasFilter = Boolean(selectedPipelineStageId || selectedStepNumber || selectedK8sComponentId || selectedRcaKindFilter !== "all" || q);
     const cleanState = h("div", {
       className: "card",
-      style: "padding:2.5rem;text-align:center;background:var(--bg-elevated);border:1.5px solid var(--success);border-radius:16px;margin-top:0.5rem;"
+      style: "padding:2.5rem;text-align:center;background:var(--bg-elevated);border:1.5px solid var(--success);border-radius:16px;margin-top:0.25rem;"
     }, [
       h("div", { style: "width:54px;height:54px;border-radius:50%;background:rgba(16,185,129,0.12);color:var(--success);display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem;" }, [
         h("svg", { width: "28", height: "28", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.5" }, [
@@ -2982,13 +3185,13 @@ function renderDiagnosticsRCA(data) {
         ])
       ]),
       h("h3", { style: "font-size:1.2rem;font-weight:700;color:var(--fg);margin:0 0 0.5rem;" },
-        selectedPipelineStageId ? "Zero Anomalies at This Pipeline Stage" : "Zero Anomalies Detected"),
-      h("p", { style: "font-size:0.85rem;color:var(--fg-muted);max-width:480px;margin:0 auto;" },
-        selectedPipelineStageId
-          ? "No active stalls or advisories were detected at the selected pipeline stage."
-          : "AI Diagnostic Engine continuously verified all 12 pipeline steps across controllers, scheduler, kubelet CSI/CNI/runtime, readiness probes, and EndpointSlices.")
+        hasFilter ? "Zero Findings Match Selected Filter" : "Zero Anomalies Detected"),
+      h("p", { style: "font-size:0.85rem;color:var(--fg-muted);max-width:520px;margin:0 auto;" },
+        hasFilter
+          ? "No active stalls or advisories matched your current K8s component / step filter. Click 'Reset Filters' or '🧪 Simulate All 12 Steps' to explore all 12 pipeline stages."
+          : "AI Diagnostic Engine verified all 12 pipeline steps across controllers, scheduler, kubelet CSI/CNI/runtime, readiness probes, and EndpointSlices.")
     ]);
-    renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, cleanState].filter(Boolean)));
+    renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, filterPanel, cleanState].filter(Boolean)));
     return;
   }
 
@@ -3003,9 +3206,18 @@ function renderDiagnosticsRCA(data) {
             rc.step_badge ? h("span", {
               style: "font-size:0.72rem;font-weight:700;font-family:var(--font-mono);padding:2px 9px;border-radius:6px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--border);"
             }, rc.step_badge) : null,
-            rc.component ? h("span", {
-              style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--fg-muted);background:var(--bg-inset);padding:2px 8px;border-radius:6px;"
-            }, rc.component) : null,
+            rc.component ? h("button", {
+              type: "button",
+              title: "Click to filter by this Kubernetes component",
+              onclick: () => {
+                selectedK8sComponentId = selectedK8sComponentId === rc.component_id ? null : rc.component_id;
+                renderDiagnosticsRCA(data);
+              },
+              style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--fg-muted);background:var(--bg-inset);padding:2px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer;"
+            }, `⚙ ${rc.component}`) : null,
+            rc.simulated ? h("span", {
+              style: "font-size:0.68rem;font-weight:700;padding:2px 7px;border-radius:6px;background:rgba(245,158,11,0.15);color:var(--warning);"
+            }, "SIMULATED DRILL") : null,
             h("span", { style: "font-size:0.75rem;font-weight:600;color:var(--accent);" }, `Confidence: ${Math.round((rc.confidence || 0.95) * 100)}%`),
             h("span", { style: "font-size:0.75rem;color:var(--fg-subtle);" }, `Namespace: ${rc.namespace}`)
           ].filter(Boolean)),
@@ -3068,7 +3280,7 @@ function renderDiagnosticsRCA(data) {
     ].filter(Boolean));
   });
 
-  renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, ...rcaCards].filter(Boolean)));
+  renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, filterPanel, ...rcaCards].filter(Boolean)));
 }
 
 // -- view: audit logs & timeline ----------------------------------------------
