@@ -2500,7 +2500,6 @@ let selectedStepNumber = null;
 let selectedK8sComponentId = null;
 let selectedRcaKindFilter = "all"; // "all" | "active_failure" | "best_practice"
 let rcaSearchQuery = "";
-let simulateAll12Steps = false;
 let _kmAnimTimer = null;
 
 async function loadDiagnosticsRCA() {
@@ -2508,25 +2507,11 @@ async function loadDiagnosticsRCA() {
   const token = nextLoadToken("diagnostics");
   renderInto(container, loadingSkeleton());
   try {
-    const data = await api.getDiagnosticsRCA(state.selectedClusterId, undefined, simulateAll12Steps);
+    const data = await api.getDiagnosticsRCA(state.selectedClusterId);
     if (isStaleToken("diagnostics", token)) return;
     renderDiagnosticsRCA(data);
   } catch (err) {
     if (isStaleToken("diagnostics", token)) return;
-    // If the live cloud cluster is currently offline/destroyed, automatically
-    // load the 12-Step Simulation Lab so the operator can still explore all 12 steps.
-    if (!simulateAll12Steps) {
-      try {
-        simulateAll12Steps = true;
-        const simData = await api.getDiagnosticsRCA(state.selectedClusterId || "kubeorbit-gke", undefined, true);
-        if (isStaleToken("diagnostics", token)) return;
-        simData._autoFallbackReason = err.message || "Cluster unreachable";
-        renderDiagnosticsRCA(simData);
-        return;
-      } catch (_) {
-        // Fall through to errorState if backend itself is down
-      }
-    }
     renderInto(container, errorState(err, loadDiagnosticsRCA));
   }
 }
@@ -2611,15 +2596,11 @@ function buildKubectlMachineInfographic(data) {
   const narratorEl = h("div", { className: "km-narrator" }, [
     h("div", { id: "km-narrator-text", style: "display:flex;align-items:center;gap:10px;flex-wrap:wrap;" }, [
       h("span", { style: "font-weight:800;color:var(--km-accent-red);font-family:var(--font-mono);" },
-        data.simulated
-          ? "🧪 12-STEP SIMULATION DRILL ACTIVE"
-          : (selectedStepNumber ? `FILTERED: STEP ${selectedStepNumber}` : (selectedK8sComponentId ? `COMPONENT: ${selectedK8sComponentId.toUpperCase()}` : "LIVE 12-STEP CLUSTER TELEMETRY"))),
+        selectedStepNumber ? `FILTERED: STEP ${selectedStepNumber}` : (selectedK8sComponentId ? `COMPONENT: ${selectedK8sComponentId.toUpperCase()}` : "LIVE 12-STEP CLUSTER TELEMETRY")),
       h("span", {},
-        data.simulated
-          ? `Simulating all 12 steps across kubectl, kube-apiserver, etcd, controller-manager, scheduler, kubelet, and EndpointSlice.${data._autoFallbackReason ? " (Live cluster offline — auto-loaded 12-Step Simulation Lab)" : ""}`
-          : (activeCauses.length
-              ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName} (${providerName}) — click any numbered step (1–12) or K8s component chip to filter.`
-              : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}.`))
+        activeCauses.length
+          ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName} (${providerName}) — click any numbered step (1–12) or K8s component chip to filter.`
+          : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}.`)
     ]),
     h("span", { style: "font-size:0.74rem;font-family:var(--font-mono);color:var(--km-muted-fg);white-space:nowrap;" },
       `${summary.workloads_healthy}/${summary.workloads_total} Workloads Ready`)
@@ -2797,20 +2778,6 @@ function buildKubectlMachineInfographic(data) {
     });
   });
 
-  // Toggle button: Simulate All 12 Steps (Chaos Drill Mode)
-  const simToggleBtn = h("button", {
-    type: "button",
-    className: `km-btn ${simulateAll12Steps ? "km-btn--sim-on" : ""}`,
-    title: "Toggle simulated failures across all 12 steps (Steps 1 through 12)",
-    onclick: () => {
-      simulateAll12Steps = !simulateAll12Steps;
-      selectedStepNumber = null;
-      selectedK8sComponentId = null;
-      selectedPipelineStageId = null;
-      loadDiagnosticsRCA();
-    }
-  }, simulateAll12Steps ? "🧪 Simulate All 12 Steps: ON" : "🧪 Simulate All 12 Steps");
-
   // Animated 12-Step Sequencer ("▶ Replay 12-Step Flow")
   const playBtn = h("button", {
     type: "button",
@@ -2937,8 +2904,7 @@ function buildKubectlMachineInfographic(data) {
     h("div", { className: "km-box" }, [
       h("div", { className: "km-box__title" }, [
         h("span", {}, "The machine in numbers"),
-        h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--km-accent-cyan);" },
-          data.simulated ? `${clusterName} (12-Step Sim)` : clusterName)
+        h("span", { style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--km-accent-cyan);" }, clusterName)
       ]),
       h("div", { className: "km-num-hero" }, [
         h("span", { className: "km-num-hero__big" }, "12"),
@@ -2997,7 +2963,7 @@ function buildKubectlMachineInfographic(data) {
         h("div", { className: "km-shell__tag" }, [
           h("span", {}, "∞ KUBEORBIT 360°"),
           h("span", { style: "opacity:0.6;" }, "·"),
-          h("span", {}, data.simulated ? "12-STEP CHAOS SIMULATION LAB" : `LIVE ${providerName} CONTROL & DATA PLANE`)
+          h("span", {}, `LIVE ${providerName} CONTROL & DATA PLANE`)
         ]),
         h("h2", { className: "km-shell__title" }, [
           "The ",
@@ -3010,7 +2976,6 @@ function buildKubectlMachineInfographic(data) {
       ]),
       h("div", { className: "km-controls" }, [
         resetFilterBtn,
-        simToggleBtn,
         playBtn,
       ].filter(Boolean))
     ]),
@@ -3154,7 +3119,7 @@ function renderDiagnosticsRCA(data) {
   const stats = statGrid([
     statCard("Cluster Health Score", `${summary.overall_score}%`, [pill(summary.overall_score >= 80 ? "Healthy" : "Anomalies Detected", summary.overall_score >= 80 ? "healthy" : "critical")], STAT_ICONS.pulse),
     statCard("Folded Root Causes", summary.active_root_causes, [pill(`${allRootCauses.reduce((acc, r) => acc + (r.folded_failures?.length || 1), 0)} Raw Symptoms Folded`, "info")], STAT_ICONS.funnel),
-    statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`, data.simulated ? [pill("12-Step Simulation Lab", "warning")] : null, STAT_ICONS.shieldCheck),
+    statCard("Workload Health", `${summary.workloads_healthy}/${summary.workloads_total} Healthy`, null, STAT_ICONS.shieldCheck),
   ]);
 
   const machineInfographic = buildKubectlMachineInfographic(data);
@@ -3188,7 +3153,7 @@ function renderDiagnosticsRCA(data) {
         hasFilter ? "Zero Findings Match Selected Filter" : "Zero Anomalies Detected"),
       h("p", { style: "font-size:0.85rem;color:var(--fg-muted);max-width:520px;margin:0 auto;" },
         hasFilter
-          ? "No active stalls or advisories matched your current K8s component / step filter. Click 'Reset Filters' or '🧪 Simulate All 12 Steps' to explore all 12 pipeline stages."
+          ? "No active stalls or advisories matched your current K8s component / step filter. Click 'Reset Filters' to view all findings."
           : "AI Diagnostic Engine verified all 12 pipeline steps across controllers, scheduler, kubelet CSI/CNI/runtime, readiness probes, and EndpointSlices.")
     ]);
     renderInto(container, h("div", { style: "display:flex;flex-direction:column;gap:1.25rem;" }, [stats, machineInfographic, filterPanel, cleanState].filter(Boolean)));
@@ -3215,9 +3180,6 @@ function renderDiagnosticsRCA(data) {
               },
               style: "font-size:0.72rem;font-family:var(--font-mono);color:var(--fg-muted);background:var(--bg-inset);padding:2px 8px;border-radius:6px;border:1px solid var(--border);cursor:pointer;"
             }, `⚙ ${rc.component}`) : null,
-            rc.simulated ? h("span", {
-              style: "font-size:0.68rem;font-weight:700;padding:2px 7px;border-radius:6px;background:rgba(245,158,11,0.15);color:var(--warning);"
-            }, "SIMULATED DRILL") : null,
             h("span", { style: "font-size:0.75rem;font-weight:600;color:var(--accent);" }, `Confidence: ${Math.round((rc.confidence || 0.95) * 100)}%`),
             h("span", { style: "font-size:0.75rem;color:var(--fg-subtle);" }, `Namespace: ${rc.namespace}`)
           ].filter(Boolean)),
