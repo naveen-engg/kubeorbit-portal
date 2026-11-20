@@ -445,9 +445,14 @@ class RuntimeEnv:
         ).strip()
     )
     disable_local_provider: bool = field(
-        default_factory=lambda: os.environ.get("KUBEORBIT_DISABLE_LOCAL_PROVIDER", "").lower() == "true"
-        or os.environ.get("KUBEORBIT_AUTH_MODE", "none").lower() == "iap"
-        or bool(os.environ.get("K_SERVICE"))
+        default_factory=lambda: (
+            os.environ.get("KUBEORBIT_DISABLE_LOCAL_PROVIDER", "").lower() == "true"
+            if "KUBEORBIT_DISABLE_LOCAL_PROVIDER" in os.environ
+            else (
+                os.environ.get("KUBEORBIT_AUTH_MODE", "none").lower() == "iap"
+                or bool(os.environ.get("K_SERVICE"))
+            )
+        )
     )
     kubeconfig_home: Path = field(
         default_factory=lambda: Path(
