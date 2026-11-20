@@ -1001,11 +1001,19 @@
         <div>
           <label for="local-kubeconfig-path" style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--fg-subtle);display:block;margin-bottom:.3rem;">Kubeconfig Path</label>
           <div style="display:flex;gap:8px;align-items:center;">
-            <input type="text" id="local-kubeconfig-path" value="~/.kube/config" style="
+            <input type="text" id="local-kubeconfig-path" value="~/.kube/config" placeholder="/path/to/kubeconfig or ~/.kube/config" style="
               flex:1;padding:9px 11px;border:1.5px solid var(--border);border-radius:10px;
               background:var(--bg-inset);color:var(--fg);font-size:0.85rem;font-family:var(--font-mono);
               outline:none;transition:border-color 150ms;
             " onfocus="this.style.borderColor='#188038'" onblur="this.style.borderColor='var(--border)'" />
+            <input type="file" id="local-file-input" accept=".yaml,.yml,.conf,.config,*" hidden />
+            <button type="button" id="local-upload-btn" title="Choose a kubeconfig file from your computer" style="
+              padding:9px 12px;border:1.5px solid var(--border);border-radius:10px;
+              background:var(--bg-elevated);color:var(--fg);font-size:0.8rem;font-weight:600;cursor:pointer;
+              box-shadow:var(--shadow-xs);white-space:nowrap;font-family:inherit;transition:border-color 150ms,box-shadow 150ms;
+            ">
+              Browse...
+            </button>
             <button type="button" id="local-parse-btn" style="
               padding:9px 14px;border:1.5px solid #188038;border-radius:10px;
               background:linear-gradient(180deg, color-mix(in srgb,#188038 18%,var(--bg-elevated)) 0%, color-mix(in srgb,#188038 8%,var(--bg-elevated)) 100%);

@@ -4809,6 +4809,47 @@ function initOnboardModal() {
     return { id, name: name || id, provider, environment, description, team_id, team_name, config };
   }
 
+  function applyParsedKubeconfig(res) {
+    if (res.kubeconfig_path && $("local-kubeconfig-path")) {
+      $("local-kubeconfig-path").value = res.kubeconfig_path;
+    }
+    const select = $("local-context-select");
+    const wrap = $("local-context-wrap");
+    if (select) {
+      select.innerHTML = "";
+      (res.contexts || []).forEach((ctx) => {
+        const opt = document.createElement("option");
+        opt.value = ctx.name;
+        opt.textContent = `${ctx.name} (${ctx.cluster})`;
+        if (ctx.name === res.current_context) opt.selected = true;
+        select.appendChild(opt);
+      });
+      if (wrap) wrap.style.display = "block";
+    }
+    if (res.suggested_id && !$("onboard-name").value) {
+      $("onboard-name").value = res.suggested_id;
+    }
+    showStatus(`✓ Found ${res.contexts?.length || 0} context(s) in Kubeconfig`, "success");
+  }
+
+  const uploadLocalBtn = $("local-upload-btn");
+  const uploadLocalInput = $("local-file-input");
+  uploadLocalBtn?.addEventListener("click", () => uploadLocalInput?.click());
+  uploadLocalInput?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    showStatus(`Uploading and scanning ${file.name}...`, "info");
+    try {
+      const content = await file.text();
+      const res = await api.parseKubeconfig(file.name, content, file.name);
+      applyParsedKubeconfig(res);
+    } catch (err) {
+      showStatus(`✗ Failed to parse Kubeconfig: ${err.message}`, "error");
+    } finally {
+      uploadLocalInput.value = "";
+    }
+  });
+
   const parseLocalBtn = $("local-parse-btn");
   parseLocalBtn?.addEventListener("click", async () => {
     const path = $("local-kubeconfig-path")?.value?.trim();
@@ -4819,23 +4860,7 @@ function initOnboardModal() {
     showStatus("Scanning local Kubeconfig file...", "info");
     try {
       const res = await api.parseKubeconfig(path);
-      const select = $("local-context-select");
-      const wrap = $("local-context-wrap");
-      if (select) {
-        select.innerHTML = "";
-        (res.contexts || []).forEach((ctx) => {
-          const opt = document.createElement("option");
-          opt.value = ctx.name;
-          opt.textContent = `${ctx.name} (${ctx.cluster})`;
-          if (ctx.name === res.current_context) opt.selected = true;
-          select.appendChild(opt);
-        });
-        if (wrap) wrap.style.display = "block";
-      }
-      if (res.suggested_id && !$("onboard-name").value) {
-        $("onboard-name").value = res.suggested_id;
-      }
-      showStatus(`✓ Found ${res.contexts?.length || 0} context(s) in Kubeconfig`, "success");
+      applyParsedKubeconfig(res);
     } catch (err) {
       showStatus(`✗ Failed to parse Kubeconfig: ${err.message}`, "error");
     }

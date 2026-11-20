@@ -189,7 +189,7 @@ resource "google_cloud_run_v2_service" "kubeorbit" {
       }
       env {
         name  = "KUBEORBIT_DISABLE_LOCAL_PROVIDER"
-        value = "true"
+        value = "false"
       }
       env {
         name  = "KUBEORBIT_CONFIG_PATH"

@@ -263,6 +263,8 @@ class OnboardClusterRequest(BaseModel):
 
 class ParseKubeconfigRequest(BaseModel):
     kubeconfig_path: str = Field("~/.kube/config", description="Path to local kubeconfig file")
+    kubeconfig_content: Optional[str] = Field(None, description="Optional raw kubeconfig YAML content uploaded from browser")
+    filename: Optional[str] = Field(None, description="Optional original filename for uploaded kubeconfig")
 
 
 def _enforce_provider_policy(provider_name: str) -> None:
@@ -440,14 +442,30 @@ async def parse_kubeconfig(
             detail="Parsing local server kubeconfig files is disabled in Cloud Run / IAP enterprise mode.",
         )
 
-    raw_path = req.kubeconfig_path.strip()
-    if not raw_path:
-        raw_path = "~/.kube/config"
-    expanded_path = os.path.expanduser(raw_path)
-    path_obj = Path(expanded_path)
+    if req.kubeconfig_content is not None:
+        import re
+        import yaml
+        try:
+            content = yaml.safe_load(req.kubeconfig_content) or {}
+            if not isinstance(content, dict):
+                raise ValueError("Kubeconfig must be a YAML mapping")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid kubeconfig YAML: {str(exc)}")
+        raw_name = Path(req.filename or "uploaded-kubeconfig.yaml").stem
+        safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw_name).strip("-") or "uploaded"
+        dest_dir = get_runtime_env().kubeconfig_home
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path_obj = dest_dir / f"uploaded-{safe_name}.yaml"
+        path_obj.write_text(req.kubeconfig_content, encoding="utf-8")
+    else:
+        raw_path = req.kubeconfig_path.strip()
+        if not raw_path:
+            raw_path = "~/.kube/config"
+        expanded_path = os.path.expanduser(raw_path)
+        path_obj = Path(expanded_path)
 
-    if not path_obj.exists():
-        raise HTTPException(status_code=404, detail=f"Kubeconfig file not found at: {raw_path}")
+        if not path_obj.exists():
+            raise HTTPException(status_code=404, detail=f"Kubeconfig file not found at: {raw_path}")
 
     try:
         import yaml

@@ -107,8 +107,15 @@ export const api = {
   testOnboardCluster: (data) =>
     apiFetch("/api/admin/clusters/test-connection", { method: "POST", body: JSON.stringify(data) }),
 
-  parseKubeconfig: (kubeconfig_path) =>
-    apiFetch("/api/admin/clusters/parse-kubeconfig", { method: "POST", body: JSON.stringify({ kubeconfig_path }) }),
+  parseKubeconfig: (kubeconfig_path, kubeconfig_content = null, filename = null) =>
+    apiFetch("/api/admin/clusters/parse-kubeconfig", {
+      method: "POST",
+      body: JSON.stringify(
+        kubeconfig_content !== null
+          ? { kubeconfig_path: kubeconfig_path || "~/.kube/config", kubeconfig_content, filename }
+          : { kubeconfig_path }
+      ),
+    }),
 
   listClusters: () =>
     apiFetch("/api/admin/clusters"),
