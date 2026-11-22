@@ -286,6 +286,7 @@ async function populateNamespaceSelects(clusterId) {
 
   fillSelect($("workloads-namespace-select"), general, { placeholder: "All namespaces (excl. system)" });
   if ($("applications-namespace-select")) fillSelect($("applications-namespace-select"), general, { placeholder: "All namespaces" });
+  if ($("diagnostics-namespace-select")) fillSelect($("diagnostics-namespace-select"), general, { placeholder: "All namespaces (excl. system)" });
   if ($("resourcemap-namespace-select")) fillSelect($("resourcemap-namespace-select"), general);
   fillSelect($("events-namespace-select"), general, { placeholder: "All namespaces (excl. system)" });
   fillSelect($("network-namespace-select"), general);
@@ -2505,9 +2506,10 @@ let _kmAnimTimer = null;
 async function loadDiagnosticsRCA() {
   const container = $("diagnostics-content");
   const token = nextLoadToken("diagnostics");
+  const namespace = $("diagnostics-namespace-select")?.value || undefined;
   renderInto(container, loadingSkeleton());
   try {
-    const data = await api.getDiagnosticsRCA(state.selectedClusterId);
+    const data = await api.getDiagnosticsRCA(state.selectedClusterId, namespace);
     if (isStaleToken("diagnostics", token)) return;
     renderDiagnosticsRCA(data);
   } catch (err) {
@@ -2545,6 +2547,7 @@ function buildKubectlMachineInfographic(data) {
 
   const clusterName = state.clusterBadge?.name || state.selectedClusterId || "active-cluster";
   const providerName = (state.clusterBadge?.provider || "k8s").toUpperCase();
+  const activeNs = $("diagnostics-namespace-select")?.value || "";
 
   // Generate 52 golden-angle points for the etcd cluster-state particle sphere at (200, 145)
   const etcdDots = [];
@@ -2599,8 +2602,8 @@ function buildKubectlMachineInfographic(data) {
         selectedStepNumber ? `FILTERED: STEP ${selectedStepNumber}` : (selectedK8sComponentId ? `COMPONENT: ${selectedK8sComponentId.toUpperCase()}` : "LIVE 12-STEP CLUSTER TELEMETRY")),
       h("span", {},
         activeCauses.length
-          ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName} (${providerName}) — click any numbered step (1–12) or K8s component chip to filter.`
-          : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}.`)
+          ? `${activeCauses.length} active pipeline stall(s) detected on ${clusterName}${activeNs ? ` / ${activeNs}` : ""} (${providerName}) — click any numbered step (1–12) or K8s component chip to filter.`
+          : `All 12 steps from kubectl apply → EndpointSlice traffic are healthy on ${clusterName}${activeNs ? ` / ${activeNs}` : ""}.`)
     ]),
     h("span", { style: "font-size:0.74rem;font-family:var(--font-mono);color:var(--km-muted-fg);white-space:nowrap;" },
       `${summary.workloads_healthy}/${summary.workloads_total} Workloads Ready`)
@@ -2979,7 +2982,7 @@ function buildKubectlMachineInfographic(data) {
           h("span", {}, ".")
         ]),
         h("div", { className: "km-shell__subtitle" },
-          `Cluster: ${clusterName} · Click any numbered node (1–12), stall card, or K8s component chip below to filter`)
+          `Cluster: ${clusterName}${activeNs ? ` · Namespace: ${activeNs}` : " · All Namespaces"} · Click any numbered node (1–12), stall card, or K8s component chip below to filter`)
       ]),
       h("div", { className: "km-controls" }, [
         resetFilterBtn,
@@ -4230,6 +4233,12 @@ function wireStaticControls() {
   $("workloads-catalog-search")?.addEventListener("input", () => state.activeView === "workloads" && catalogTypeFilter && renderCatalogPanelBody());
   $("workloads-catalog-close")?.addEventListener("click", () => catalogTypeFilter && toggleWorkloadCatalogType(catalogTypeFilter));
   $("applications-namespace-select")?.addEventListener("change", () => state.activeView === "applications" && loadLogicalApplications());
+  $("diagnostics-namespace-select")?.addEventListener("change", () => {
+    selectedPipelineStageId = null;
+    selectedStepNumber = null;
+    selectedK8sComponentId = null;
+    if (state.activeView === "diagnostics") loadDiagnosticsRCA();
+  });
   $("diagnostics-reanalyze-btn")?.addEventListener("click", () => state.activeView === "diagnostics" && loadDiagnosticsRCA());
   $("audit-type-select")?.addEventListener("change", () => state.activeView === "audit" && loadAuditLogsView());
 
