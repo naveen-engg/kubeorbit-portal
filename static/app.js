@@ -4,8 +4,8 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
-import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui4";
-import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261122-agui4";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui5";
+import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261122-agui5";
 import {
   h,
   renderInto,
@@ -3999,6 +3999,7 @@ function summarizeUIAction(payload) {
 
 function getAGUIToolCallbacks() {
   return {
+    getActiveView: () => state.activeView,
     onNavigate: (view, ns) => executePortalUIAction({ action: "navigate", view, namespace: ns ?? "" }),
     onInspectPod: (podName, ns) => openPodInspectorModal(podName, ns || "default"),
     onOpenLogs: (podName, ns) => openLogsModal(podName, ns || "default"),
@@ -4856,6 +4857,9 @@ function switchView(view) {
   hideNodeTooltip(); // a topology view's hover tooltip would otherwise float, stuck, over an unrelated page
   state.activeView = view;
   renderAGUIQuickPrompts();
+  if (!aguiAbortController && state.aiChatMessages.length > 0 && $("ai-chat-panel")?.classList.contains("is-open")) {
+    renderAIChatMessages();
+  }
   document.querySelectorAll(".nav-tabs__item, .sidebar-item").forEach((btn) => btn.setAttribute("aria-selected", String(btn.dataset.view === view)));
   const viewAllBtn = $("view-all-clusters-btn");
   if (viewAllBtn) {

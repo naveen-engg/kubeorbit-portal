@@ -2195,6 +2195,8 @@ input[name="onboard-env"]:focus-visible + .env-pill-opt { outline: 2px solid var
   font-size: 0.64rem;
   font-weight: 800;
   text-transform: uppercase;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .agui-tool-chip__tag--mcp {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -2207,6 +2209,7 @@ input[name="onboard-env"]:focus-visible + .env-pill-opt { outline: 2px solid var
 .agui-tool-chip__name {
   font-family: var(--font-mono, monospace);
   font-size: 0.73rem;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -184,6 +184,7 @@ function renderNamespacesView(argsObj, data, uiState, rerender, cb) {
     uiState.selectedNs = appNs[0] || names[0] || "";
   }
   const selected = uiState.selectedNs;
+  const activeView = cb.getActiveView?.() || uiState.activeAction || "";
 
   const renderChip = (nsName, isSys = false) =>
     h(
@@ -207,7 +208,15 @@ function renderNamespacesView(argsObj, data, uiState, rerender, cb) {
     h("div", { className: "agui-iv-header" }, [
       h("span", { className: "agui-iv-title" }, `Cluster Namespaces (${names.length})`),
       h("div", { className: "agui-iv-actions" }, [
-        miniBtn("Open Namespaces View", () => cb.onNavigate?.("namespaces", selected || ""), "primary"),
+        miniBtn(
+          "Open Namespaces View",
+          () => {
+            uiState.activeAction = "namespaces";
+            cb.onNavigate?.("namespaces", selected || "");
+            rerender();
+          },
+          activeView === "namespaces" ? "primary" : "default"
+        ),
       ]),
     ]),
   ];
@@ -244,10 +253,42 @@ function renderNamespacesView(argsObj, data, uiState, rerender, cb) {
           h("strong", {}, selected),
         ]),
         h("div", { className: "agui-iv-actions" }, [
-          miniBtn("Resources", () => cb.onNavigate?.("namespaces", selected), "primary"),
-          miniBtn("Workloads", () => cb.onNavigate?.("workloads", selected)),
-          miniBtn("Network", () => cb.onNavigate?.("network", selected)),
-          miniBtn("12-Step", () => cb.onFilter12Step?.(selected, null)),
+          miniBtn(
+            "Resources",
+            () => {
+              uiState.activeAction = "namespaces";
+              cb.onNavigate?.("namespaces", selected);
+              rerender();
+            },
+            activeView === "namespaces" ? "primary" : "default"
+          ),
+          miniBtn(
+            "Workloads",
+            () => {
+              uiState.activeAction = "workloads";
+              cb.onNavigate?.("workloads", selected);
+              rerender();
+            },
+            activeView === "workloads" ? "primary" : "default"
+          ),
+          miniBtn(
+            "Network",
+            () => {
+              uiState.activeAction = "network";
+              cb.onNavigate?.("network", selected);
+              rerender();
+            },
+            activeView === "network" ? "primary" : "default"
+          ),
+          miniBtn(
+            "12-Step",
+            () => {
+              uiState.activeAction = "diagnostics";
+              cb.onFilter12Step?.(selected, null);
+              rerender();
+            },
+            activeView === "diagnostics" ? "primary" : "default"
+          ),
           miniBtn("Ask AI", () => cb.onAskAI?.(`Inspect namespace '${selected}': list pods, services, and any warnings or unhealthy workloads.`), "ai"),
         ]),
       ])
@@ -399,6 +440,8 @@ function renderNamespaceResourcesView(argsObj, data, uiState, rerender, cb) {
     );
   }
 
+  const activeView = cb.getActiveView?.() || uiState.activeAction || "";
+
   return h("div", { className: "agui-iv" }, [
     h("div", { className: "agui-iv-header" }, [
       h("span", { className: "agui-iv-title" }, [
@@ -406,9 +449,33 @@ function renderNamespaceResourcesView(argsObj, data, uiState, rerender, cb) {
         h("span", { className: "agui-iv-mono" }, ns),
       ]),
       h("div", { className: "agui-iv-actions" }, [
-        miniBtn("Open Namespace", () => cb.onNavigate?.("namespaces", ns), "primary"),
-        miniBtn("Network", () => cb.onNavigate?.("network", ns)),
-        miniBtn("12-Step", () => cb.onFilter12Step?.(ns, null)),
+        miniBtn(
+          "Open Namespace",
+          () => {
+            uiState.activeAction = "namespaces";
+            cb.onNavigate?.("namespaces", ns);
+            rerender();
+          },
+          activeView === "namespaces" ? "primary" : "default"
+        ),
+        miniBtn(
+          "Network",
+          () => {
+            uiState.activeAction = "network";
+            cb.onNavigate?.("network", ns);
+            rerender();
+          },
+          activeView === "network" ? "primary" : "default"
+        ),
+        miniBtn(
+          "12-Step",
+          () => {
+            uiState.activeAction = "diagnostics";
+            cb.onFilter12Step?.(ns, null);
+            rerender();
+          },
+          activeView === "diagnostics" ? "primary" : "default"
+        ),
       ]),
     ]),
     h(
@@ -436,11 +503,20 @@ function renderNamespaceResourcesView(argsObj, data, uiState, rerender, cb) {
 
 function renderHelmReleasesView(argsObj, data, uiState, rerender, cb) {
   const items = asArray(data?.items);
+  const activeView = cb.getActiveView?.() || uiState.activeAction || "";
   return h("div", { className: "agui-iv" }, [
     h("div", { className: "agui-iv-header" }, [
       h("span", { className: "agui-iv-title" }, `Helm Releases (${items.length})`),
       h("div", { className: "agui-iv-actions" }, [
-        miniBtn("Open Helm View", () => cb.onNavigate?.("helm", ""), "primary"),
+        miniBtn(
+          "Open Helm View",
+          () => {
+            uiState.activeAction = "helm";
+            cb.onNavigate?.("helm", "");
+            rerender();
+          },
+          activeView === "helm" ? "primary" : "default"
+        ),
       ]),
     ]),
     items.length
@@ -464,8 +540,28 @@ function renderHelmReleasesView(argsObj, data, uiState, rerender, cb) {
                 ),
               ]),
               h("div", { className: "agui-iv-actions" }, [
-                rel.namespace ? miniBtn("Namespace", () => cb.onNavigate?.("namespaces", rel.namespace), "primary") : null,
-                rel.namespace ? miniBtn("12-Step", () => cb.onFilter12Step?.(rel.namespace, null)) : null,
+                rel.namespace
+                  ? miniBtn(
+                      "Namespace",
+                      () => {
+                        uiState.activeAction = "namespaces";
+                        cb.onNavigate?.("namespaces", rel.namespace);
+                        rerender();
+                      },
+                      activeView === "namespaces" ? "primary" : "default"
+                    )
+                  : null,
+                rel.namespace
+                  ? miniBtn(
+                      "12-Step",
+                      () => {
+                        uiState.activeAction = "diagnostics";
+                        cb.onFilter12Step?.(rel.namespace, null);
+                        rerender();
+                      },
+                      activeView === "diagnostics" ? "primary" : "default"
+                    )
+                  : null,
                 miniBtn("Ask AI", () => cb.onAskAI?.(`Inspect Helm release '${rel.name}' in namespace '${rel.namespace || "default"}': show pods, service endpoints, and health.`), "ai"),
               ].filter(Boolean)),
             ])
