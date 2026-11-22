@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>KubeOrbit — Multi-Cloud Cluster Navigator</title>
   <meta name="description" content="Unified GKE / EKS / AKS / Local Kubernetes Multi-Cloud Cluster Navigator" />
-  <link rel="stylesheet" href="/styles.css?v=20261119-v7" />
+  <link rel="stylesheet" href="/styles.css?v=20261122-agui1" />
 </head>
 <body>
   <div class="app-shell">
@@ -592,13 +592,29 @@
         </button>
       </div>
     </div>
+    <div class="agui-protocol-bar" id="agui-protocol-bar">
+      <div class="agui-protocol-bar__badges">
+        <span class="agui-badge agui-badge--protocol" title="ADK <-> AG-UI <-> MCP stack">ADK · AG-UI SSE · MCP</span>
+        <span class="agui-badge agui-badge--state" id="agui-state-badge">Live UI Sync</span>
+      </div>
+      <label class="agui-autosync-toggle" title="Automatically execute agent UI navigation & modal inspection tools">
+        <input type="checkbox" id="ai-chat-autosync" checked />
+        <span>Auto-Sync UI</span>
+      </label>
+    </div>
+    <div class="agui-quick-prompts" id="agui-quick-prompts">
+      <button type="button" class="agui-quick-chip" data-prompt="Summarize unhealthy pods and show the 12-Step kubectl apply Machine filtered to unhealthy workloads.">Diagnose Unhealthy + 12-Step</button>
+      <button type="button" class="agui-quick-chip" data-prompt="What Helm releases and pods are running in helm-demo? Switch to the Helm view.">Inspect helm-demo</button>
+      <button type="button" class="agui-quick-chip" data-prompt="Check recent cluster events and switch to Events view.">Recent Events</button>
+    </div>
     <div class="ai-chat-panel__messages" id="ai-chat-messages">
       <div class="ai-chat-panel__empty" id="ai-chat-empty">
-        Ask about the active cluster — pods, events, costs, root causes, anything the read-only tools can see.
+        Ask about the active cluster — streams live via AG-UI (ADK &harr; MCP) and can navigate views, open inspectors, or stage guarded rollbacks.
       </div>
     </div>
     <div class="ai-chat-panel__input-row">
-      <textarea id="ai-chat-input" class="ai-chat-input" rows="1" placeholder="Ask about this cluster…"></textarea>
+      <textarea id="ai-chat-input" class="ai-chat-input" rows="1" placeholder="Ask ADK + MCP agent (Enter to send)..."></textarea>
+      <button class="btn btn--danger btn--sm" id="ai-chat-stop" type="button" hidden>Stop</button>
       <button class="btn btn--primary btn--sm" id="ai-chat-send" type="button">Send</button>
     </div>
   </div>
@@ -1071,9 +1087,10 @@
   </dialog>
 
 
-  <script type="module" src="/api.js?v=20261119-v7"></script>
-  <script type="module" src="/components.js"></script>
-  <script type="module" src="/topology.js?v=20261119-v7"></script>
-  <script type="module" src="/app.js?v=20261119-v7"></script>
+  <script type="module" src="/api.js?v=20261122-agui1"></script>
+  <script type="module" src="/agui.js?v=20261122-agui1"></script>
+  <script type="module" src="/components.js?v=20261122-agui1"></script>
+  <script type="module" src="/topology.js?v=20261122-agui1"></script>
+  <script type="module" src="/app.js?v=20261122-agui1"></script>
 </body>
 </html>

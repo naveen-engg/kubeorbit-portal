@@ -4,6 +4,7 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui1";
 import {
   h,
   renderInto,
@@ -3803,6 +3804,130 @@ function renderMarkdownNode(rawText) {
 // single-turn, read-only agent call. Never mutates the cluster -- worst case
 // it returns an error (e.g. no model credentials configured).
 
+const aguiClient = new AGUIStreamClient();
+let aguiAbortController = null;
+let aguiDiagnoseAbortController = null;
+
+function getActivePortalState() {
+  const nsMap = {
+    workloads: "workloads-namespace-select",
+    applications: "applications-namespace-select",
+    diagnostics: "diagnostics-namespace-select",
+    resourcemap: "resourcemap-namespace-select",
+    events: "events-namespace-select",
+    network: "network-namespace-select",
+    storage: "storage-namespace-select",
+    map: "map-namespace-select",
+    namespaces: "namespace-select",
+  };
+  const selectId = nsMap[state.activeView];
+  const nsEl = selectId ? $(selectId) : null;
+  return {
+    clusterId: state.selectedClusterId || "",
+    activeView: state.activeView || "overview",
+    namespace: nsEl ? nsEl.value || "" : "",
+    selectedStep: selectedStepNumber || null,
+    userRole: state.userRole || "viewer",
+    userSubject: state.userSubject || "anonymous",
+  };
+}
+
+function applyNamespaceFilterForView(view, namespace) {
+  if (namespace === undefined || namespace === null) return;
+  const nsMap = {
+    workloads: "workloads-namespace-select",
+    applications: "applications-namespace-select",
+    diagnostics: "diagnostics-namespace-select",
+    resourcemap: "resourcemap-namespace-select",
+    events: "events-namespace-select",
+    network: "network-namespace-select",
+    storage: "storage-namespace-select",
+    map: "map-namespace-select",
+    namespaces: "namespace-select",
+  };
+  const selectId = nsMap[view];
+  const el = selectId ? $(selectId) : null;
+  if (!el) return;
+  const target = String(namespace);
+  if (target === "" || Array.from(el.options).some((opt) => opt.value === target)) {
+    el.value = target;
+  } else if (target) {
+    const opt = document.createElement("option");
+    opt.value = target;
+    opt.textContent = target;
+    el.appendChild(opt);
+    el.value = target;
+  }
+}
+
+function executePortalUIAction(payload) {
+  if (!payload || !payload.action) return false;
+  if (payload.action === "navigate" && payload.view) {
+    applyNamespaceFilterForView(payload.view, payload.namespace);
+    switchView(payload.view);
+    return true;
+  }
+  if (payload.action === "filter_12step") {
+    applyNamespaceFilterForView("diagnostics", payload.namespace);
+    selectedStepNumber = payload.step_number ? Number(payload.step_number) : null;
+    if (state.activeView === "diagnostics") {
+      loadDiagnosticsRCA();
+    } else {
+      switchView("diagnostics");
+    }
+    return true;
+  }
+  if (payload.action === "inspect_pod" && payload.pod_name) {
+    openPodInspectorModal(payload.pod_name, payload.namespace || "default");
+    return true;
+  }
+  if (payload.action === "open_logs" && payload.pod_name) {
+    openLogsModal(payload.pod_name, payload.namespace || "default");
+    return true;
+  }
+  if (payload.action === "open_manifest" && payload.kind && payload.name) {
+    openManifestModal(payload.kind, payload.name, payload.namespace || "default");
+    return true;
+  }
+  return false;
+}
+
+function summarizeUIAction(payload) {
+  if (!payload) return { title: "Portal Action", meta: "" };
+  switch (payload.action) {
+    case "navigate":
+      return {
+        title: `Navigate -> ${payload.view}`,
+        meta: payload.namespace ? `namespace: ${payload.namespace}` : "all namespaces",
+      };
+    case "filter_12step":
+      return {
+        title: "Filter 12-Step kubectl apply Machine",
+        meta: [
+          payload.namespace ? `ns: ${payload.namespace}` : "ns: all",
+          payload.step_number ? `step: #${payload.step_number}` : "all steps",
+        ].join(" · "),
+      };
+    case "inspect_pod":
+      return {
+        title: `Inspect Pod ${payload.pod_name}`,
+        meta: `namespace: ${payload.namespace || "default"}`,
+      };
+    case "open_logs":
+      return {
+        title: `Open Pod Logs ${payload.pod_name}`,
+        meta: `namespace: ${payload.namespace || "default"}`,
+      };
+    case "open_manifest":
+      return {
+        title: `Open Manifest ${payload.kind}/${payload.name}`,
+        meta: `namespace: ${payload.namespace || "default"}`,
+      };
+    default:
+      return { title: payload.action || "Portal Action", meta: "" };
+  }
+}
+
 async function openAIDiagnoseModal({ namespace, resourceType, resourceName, question, title } = {}) {
   const modal = $("ai-diagnose-modal");
   const titleEl = $("ai-diagnose-title");
@@ -3811,58 +3936,225 @@ async function openAIDiagnoseModal({ namespace, resourceType, resourceName, ques
   if (!modal || !body) return;
 
   modal.hidden = false;
-  titleEl.textContent = title || "Diagnose with AI";
+  titleEl.textContent = title || "Diagnose with AI (AG-UI Live Stream)";
   subtitleEl.textContent = [state.selectedClusterId, namespace, resourceType && resourceName ? `${resourceType}/${resourceName}` : null]
     .filter(Boolean).join(" · ");
-  renderInto(body, h("div", { style: "display:flex;flex-direction:column;gap:8px;" }, [
-    h("div", { style: "font-size:0.82rem;color:var(--fg-muted);" }, "Asking the agent — this calls a live LLM and may take a few seconds…"),
-    loadingSkeleton(3),
+
+  const toolTimeline = h("div", { className: "agui-tool-timeline" });
+  const streamStatus = h("div", { className: "agui-stream-pulse" }, [
+    h("span", { className: "agui-stream-dot" }),
+    "Streaming ADK + MCP diagnosis via AG-UI SSE...",
+  ]);
+  const markdownHost = h("div", {});
+  renderInto(body, h("div", { style: "display:flex;flex-direction:column;gap:10px;" }, [
+    streamStatus,
+    toolTimeline,
+    markdownHost,
   ]));
 
+  const defaultQuestion = [
+    question || "Diagnose this resource, identify the root cause, and suggest exact next checks or remediations.",
+    namespace ? `Target namespace: ${namespace}` : null,
+    resourceType && resourceName ? `Target resource: ${resourceType}/${resourceName}` : null,
+  ].filter(Boolean).join("\n");
+
+  let accText = "";
+  const toolChips = new Map();
+  if (aguiDiagnoseAbortController) {
+    aguiDiagnoseAbortController.abort();
+  }
+  aguiDiagnoseAbortController = new AbortController();
+
   try {
-    const result = await api.aiDiagnose(state.selectedClusterId, { namespace, resourceType, resourceName, question });
-    if (result.error) {
-      renderInto(body, h("div", {
-        style: "padding:12px 14px;border-radius:10px;background:var(--danger-soft, rgba(217,48,37,0.08));border:1px solid var(--danger);color:var(--danger);font-size:0.85rem;line-height:1.5;"
-      }, result.error));
-      return;
-    }
-    renderInto(body, renderMarkdownNode(result.answer || "No response."));
+    await aguiClient.run({
+      clusterId: state.selectedClusterId,
+      state: getActivePortalState(),
+      messages: [{ role: "user", content: defaultQuestion }],
+      signal: aguiDiagnoseAbortController.signal,
+      onEvent: (evt) => {
+        if (evt.type === "TOOL_CALL_START") {
+          const isUi = String(evt.toolCallName || "").startsWith("ui_");
+          const statusSpan = h("span", { className: "agui-tool-chip__status is-running" }, "running...");
+          const detailsEl = h("pre", { className: "agui-tool-chip__details" }, "Calling tool...");
+          const chip = h("details", { className: "agui-tool-chip" }, [
+            h("summary", { className: "agui-tool-chip__summary" }, [
+              h("span", { className: "agui-tool-chip__left" }, [
+                h("span", { className: `agui-tool-chip__tag agui-tool-chip__tag--${isUi ? "agui" : "mcp"}` }, isUi ? "AG-UI" : "MCP"),
+                h("span", { className: "agui-tool-chip__name" }, evt.toolCallName || "tool"),
+              ]),
+              statusSpan,
+            ]),
+            detailsEl,
+          ]);
+          toolChips.set(evt.toolCallId, { statusSpan, detailsEl, args: "" });
+          toolTimeline.appendChild(chip);
+        } else if (evt.type === "TOOL_CALL_ARGS") {
+          const rec = toolChips.get(evt.toolCallId);
+          if (rec) {
+            rec.args += evt.delta || "";
+            rec.detailsEl.textContent = `Args:\n${rec.args}`;
+          }
+        } else if (evt.type === "TOOL_CALL_RESULT") {
+          const rec = toolChips.get(evt.toolCallId);
+          if (rec) {
+            rec.statusSpan.className = "agui-tool-chip__status is-done";
+            rec.statusSpan.textContent = "done";
+            rec.detailsEl.textContent = `Args:\n${rec.args || "{}"}\n\nResult:\n${evt.content || ""}`;
+          }
+        } else if (evt.type === "TEXT_MESSAGE_CONTENT") {
+          accText += evt.delta || "";
+          renderInto(markdownHost, renderMarkdownNode(accText));
+        } else if (evt.type === "RUN_FINISHED") {
+          streamStatus.remove();
+          if (!accText.trim()) renderInto(markdownHost, renderMarkdownNode("Diagnosis completed."));
+        } else if (evt.type === "RUN_ERROR") {
+          streamStatus.remove();
+          throw new Error(evt.message || "AG-UI diagnose stream failed.");
+        }
+      },
+    });
   } catch (err) {
+    if (err.name === "AbortError") return;
     renderInto(body, errorState(err, () => openAIDiagnoseModal({ namespace, resourceType, resourceName, question, title })));
+  } finally {
+    aguiDiagnoseAbortController = null;
   }
 }
 
 function closeAIDiagnoseModal() {
+  if (aguiDiagnoseAbortController) {
+    aguiDiagnoseAbortController.abort();
+    aguiDiagnoseAbortController = null;
+  }
   const modal = $("ai-diagnose-modal");
   if (modal) modal.hidden = true;
 }
 
-// -- Ask AI chat panel ----------------------------------------------------
-// A global floating chat, distinct from the one-shot AI Diagnose modal above.
-// Multi-turn: state.aiChatSessionId is handed back by every /ai/chat reply
-// and resent on the next message so the agent keeps the conversation's
-// context (see ai_agent.chat()). Always scoped to state.selectedClusterId --
-// the backend resolves cluster_id from the URL, not from anything in the
-// chat request body, so switching the active cluster below resets the
-// thread rather than let old messages silently answer for a new cluster.
+// -- Ask AI interactive AG-UI chat panel (ADK <-> AG-UI <-> MCP) -----------
+
+function renderToolCallChip(tc) {
+  const isUi = tc.protocol === "ag-ui";
+  const statusClass = tc.status === "error" ? "is-error" : tc.status === "done" ? "is-done" : "is-running";
+  const statusLabel = tc.status === "error" ? "failed" : tc.status === "done" ? "done" : "running...";
+  const detailsText = [
+    tc.argsText ? `Args:\n${tc.argsText}` : null,
+    tc.resultText ? `Result:\n${tc.resultText}` : null,
+  ].filter(Boolean).join("\n\n") || "Waiting for output...";
+
+  const detailsNode = h("details", {
+    className: "agui-tool-chip",
+    open: Boolean(tc.expanded),
+    ontoggle: (e) => {
+      tc.expanded = e.target.open;
+    },
+  }, [
+    h("summary", { className: "agui-tool-chip__summary" }, [
+      h("span", { className: "agui-tool-chip__left" }, [
+        h("span", { className: `agui-tool-chip__tag agui-tool-chip__tag--${isUi ? "agui" : "mcp"}` }, isUi ? "AG-UI" : "MCP"),
+        h("span", { className: "agui-tool-chip__name" }, tc.name || "tool"),
+      ]),
+      h("span", { className: `agui-tool-chip__status ${statusClass}` }, statusLabel),
+    ]),
+    h("pre", { className: "agui-tool-chip__details" }, detailsText),
+  ]);
+  return detailsNode;
+}
+
+function renderUIActionCard(act) {
+  const info = summarizeUIAction(act.payload);
+  return h("div", { className: "agui-action-card" }, [
+    h("div", { className: "agui-action-card__info" }, [
+      h("div", { className: "agui-action-card__title" }, info.title),
+      info.meta ? h("div", { className: "agui-action-card__meta" }, info.meta) : null,
+    ]),
+    h("button", {
+      type: "button",
+      className: `btn btn--sm ${act.applied ? "btn--ghost" : "btn--primary"}`,
+      onclick: () => {
+        executePortalUIAction(act.payload);
+        act.applied = true;
+        renderAIChatMessages();
+      },
+    }, act.applied ? "Re-run UI Action" : "Apply UI Action"),
+  ]);
+}
+
+function renderHitlApprovalCard(hitl) {
+  const targetText = `${hitl.workload_type}/${hitl.name} (ns: ${hitl.namespace}${hitl.to_revision ? `, rev: ${hitl.to_revision}` : ", previous revision"})`;
+  const pending = hitl.status === "pending";
+  const executing = hitl.status === "executing";
+  const operatorAllowed = canOperate();
+
+  let actionArea;
+  if (pending || executing) {
+    if (!operatorAllowed) {
+      actionArea = h("div", { className: "agui-hitl-card__status", style: "color:var(--danger);" },
+        `Viewer role (${state.userRole}) cannot execute rollback. Operator or Admin role required.`);
+    } else {
+      actionArea = h("div", { className: "agui-hitl-card__actions" }, [
+        h("button", {
+          type: "button",
+          className: "btn btn--primary btn--sm",
+          disabled: executing,
+          onclick: () => handleHitlDecision(hitl, true),
+        }, executing ? "Rolling back..." : "Approve Rollback"),
+        h("button", {
+          type: "button",
+          className: "btn btn--ghost btn--sm",
+          disabled: executing,
+          onclick: () => handleHitlDecision(hitl, false),
+        }, "Reject"),
+      ]);
+    }
+  } else {
+    const color = hitl.status === "approved" ? "#16a34a" : "var(--danger)";
+    const prefix = hitl.status === "approved" ? "Approved & executed" : hitl.status === "rejected" ? "Rejected" : "Failed";
+    actionArea = h("div", { className: "agui-hitl-card__status", style: `color:${color};` },
+      `${prefix}${hitl.outcomeMessage ? ` — ${hitl.outcomeMessage}` : ""}`);
+  }
+
+  return h("div", { className: "agui-hitl-card" }, [
+    h("div", { className: "agui-hitl-card__header" }, [
+      h("span", {}, "Human-in-the-Loop Rollback Confirmation"),
+      h("span", { className: "agui-badge agui-badge--state" }, `RBAC: ${(state.userRole || "viewer").toUpperCase()}`),
+    ]),
+    h("div", { className: "agui-hitl-card__target" }, targetText),
+    hitl.reason ? h("div", { className: "agui-hitl-card__reason" }, hitl.reason) : null,
+    actionArea,
+  ]);
+}
 
 function renderAIChatMessages() {
   const container = $("ai-chat-messages");
   if (!container) return;
   if (state.aiChatMessages.length === 0) {
     renderInto(container, h("div", { className: "ai-chat-panel__empty", id: "ai-chat-empty" },
-      "Ask about the active cluster — pods, events, costs, root causes, anything the read-only tools can see."));
+      "Ask about the active cluster — streams live via AG-UI (ADK <-> MCP) and can navigate views, open inspectors, or stage guarded rollbacks."));
     return;
   }
-  // Not renderInto(): messages must be direct siblings of the flex
-  // container for its `gap` spacing to apply between bubbles, and
-  // renderInto() only accepts a single node, not a list.
+
   container.replaceChildren(...state.aiChatMessages.map((m) => {
     if (m.role === "assistant") {
-      return h("div", { className: "ai-chat-msg ai-chat-msg--assistant" }, [
-        renderMarkdownNode(m.text),
-      ]);
+      const children = [];
+      if (m.streaming) {
+        children.push(h("div", { className: "agui-stream-pulse", style: "margin-bottom:6px;" }, [
+          h("span", { className: "agui-stream-dot" }),
+          m.stepName ? `Streaming (${m.stepName})...` : "Streaming response...",
+        ]));
+      }
+      if (m.toolCalls && m.toolCalls.length > 0) {
+        children.push(h("div", { className: "agui-tool-timeline" }, m.toolCalls.map(renderToolCallChip)));
+      }
+      const mdHost = h("div", {}, m.text ? [renderMarkdownNode(m.text)] : []);
+      m._mdHost = mdHost;
+      children.push(mdHost);
+      if (m.uiActions && m.uiActions.length > 0) {
+        children.push(...m.uiActions.map(renderUIActionCard));
+      }
+      if (m.hitlRequests && m.hitlRequests.length > 0) {
+        children.push(...m.hitlRequests.map(renderHitlApprovalCard));
+      }
+      return h("div", { className: "ai-chat-msg ai-chat-msg--assistant" }, children);
     }
     return h("div", { className: `ai-chat-msg ai-chat-msg--${m.role}` }, m.text);
   }));
@@ -3871,7 +4163,7 @@ function renderAIChatMessages() {
 
 function updateAIChatSubtitle() {
   const el = $("ai-chat-subtitle");
-  if (el) el.textContent = state.selectedClusterId ? `Scoped to ${state.selectedClusterId}` : "No cluster selected";
+  if (el) el.textContent = state.selectedClusterId ? `Scoped to ${state.selectedClusterId} · AG-UI` : "No cluster selected";
 }
 
 function openAIChatPanel() {
@@ -3898,53 +4190,256 @@ function toggleAIChatPanel() {
 }
 
 function resetAIChat() {
+  if (aguiAbortController) {
+    aguiAbortController.abort();
+    aguiAbortController = null;
+  }
   state.aiChatSessionId = null;
   state.aiChatMessages = [];
+  const stopBtn = $("ai-chat-stop");
+  const sendBtn = $("ai-chat-send");
+  if (stopBtn) stopBtn.hidden = true;
+  if (sendBtn) sendBtn.disabled = false;
   if ($("ai-chat-panel")?.classList.contains("is-open")) {
     updateAIChatSubtitle();
     renderAIChatMessages();
   }
 }
 
-async function sendAIChatMessage() {
+async function runAGUITurn(messagesPayload) {
+  const sendBtn = $("ai-chat-send");
+  const stopBtn = $("ai-chat-stop");
+  if (!state.selectedClusterId) return;
+
+  if (aguiAbortController) {
+    aguiAbortController.abort();
+  }
+  aguiAbortController = new AbortController();
+  if (sendBtn) sendBtn.disabled = true;
+  if (stopBtn) stopBtn.hidden = false;
+
+  const assistantMsg = {
+    role: "assistant",
+    text: "",
+    streaming: true,
+    stepName: "connecting",
+    toolCalls: [],
+    uiActions: [],
+    hitlRequests: [],
+    _mdHost: null,
+  };
+  state.aiChatMessages.push(assistantMsg);
+  renderAIChatMessages();
+
+  const autoSyncEnabled = () => Boolean($("ai-chat-autosync")?.checked);
+  const findToolCall = (id) => assistantMsg.toolCalls.find((tc) => tc.id === id);
+
+  try {
+    await aguiClient.run({
+      clusterId: state.selectedClusterId,
+      threadId: state.aiChatSessionId || "",
+      state: getActivePortalState(),
+      messages: messagesPayload,
+      tools: PORTAL_FRONTEND_TOOLS,
+      signal: aguiAbortController.signal,
+      onEvent: (evt) => {
+        const container = $("ai-chat-messages");
+        switch (evt.type) {
+          case "RUN_STARTED":
+            if (evt.threadId) state.aiChatSessionId = evt.threadId;
+            assistantMsg.stepName = "ADK + MCP";
+            renderAIChatMessages();
+            break;
+          case "STEP_STARTED":
+            assistantMsg.stepName = evt.stepName || "reasoning";
+            renderAIChatMessages();
+            break;
+          case "TOOL_CALL_START": {
+            const name = evt.toolCallName || "tool";
+            assistantMsg.toolCalls.push({
+              id: evt.toolCallId,
+              name,
+              protocol: name.startsWith("ui_") ? "ag-ui" : "mcp",
+              argsText: "",
+              resultText: "",
+              status: "running",
+              expanded: false,
+            });
+            renderAIChatMessages();
+            break;
+          }
+          case "TOOL_CALL_ARGS": {
+            const tc = findToolCall(evt.toolCallId);
+            if (tc) {
+              tc.argsText += evt.delta || "";
+            }
+            break;
+          }
+          case "TOOL_CALL_END": {
+            const tc = findToolCall(evt.toolCallId);
+            if (tc && tc.status === "running") tc.status = "done";
+            renderAIChatMessages();
+            break;
+          }
+          case "TOOL_CALL_RESULT": {
+            const tc = findToolCall(evt.toolCallId);
+            if (tc) {
+              tc.resultText = evt.content || "";
+              try {
+                const parsed = JSON.parse(tc.resultText);
+                tc.status = parsed && parsed.ok === false ? "error" : "done";
+              } catch {
+                tc.status = "done";
+              }
+            }
+            renderAIChatMessages();
+            break;
+          }
+          case "CUSTOM":
+            if (evt.name === "kubeorbit:ui_action" && evt.value) {
+              const applied = autoSyncEnabled() ? executePortalUIAction(evt.value) : false;
+              assistantMsg.uiActions.push({ payload: evt.value, applied });
+              renderAIChatMessages();
+            } else if (evt.name === "kubeorbit:hitl_approval" && evt.value) {
+              assistantMsg.hitlRequests.push({
+                ...evt.value,
+                status: "pending",
+                outcomeMessage: "",
+              });
+              renderAIChatMessages();
+            }
+            break;
+          case "STATE_DELTA": {
+            const badge = $("agui-state-badge");
+            if (badge && Array.isArray(evt.delta) && evt.delta.length > 0) {
+              const viewOp = evt.delta.find((op) => op.path === "/activeView");
+              if (viewOp) badge.textContent = `UI Synced -> ${viewOp.value}`;
+            }
+            break;
+          }
+          case "TEXT_MESSAGE_CONTENT":
+            assistantMsg.text += evt.delta || "";
+            if (assistantMsg._mdHost) {
+              renderInto(assistantMsg._mdHost, renderMarkdownNode(assistantMsg.text));
+              if (container) container.scrollTop = container.scrollHeight;
+            } else {
+              renderAIChatMessages();
+            }
+            break;
+          case "RUN_FINISHED":
+            if (evt.threadId) state.aiChatSessionId = evt.threadId;
+            assistantMsg.streaming = false;
+            if (!assistantMsg.text && assistantMsg.toolCalls.length === 0) {
+              assistantMsg.text = "Done.";
+            }
+            renderAIChatMessages();
+            break;
+          case "RUN_ERROR":
+            assistantMsg.streaming = false;
+            state.aiChatMessages.push({ role: "error", text: evt.message || "AG-UI run error." });
+            renderAIChatMessages();
+            break;
+          default:
+            break;
+        }
+      },
+    });
+  } catch (err) {
+    assistantMsg.streaming = false;
+    if (err.name === "AbortError") {
+      if (!assistantMsg.text) assistantMsg.text = "_Stream stopped by user._";
+    } else {
+      state.aiChatMessages.push({ role: "error", text: err.message || "AG-UI stream failed." });
+    }
+  } finally {
+    assistantMsg.streaming = false;
+    aguiAbortController = null;
+    if (sendBtn) sendBtn.disabled = false;
+    if (stopBtn) stopBtn.hidden = true;
+    renderAIChatMessages();
+    $("ai-chat-input")?.focus();
+  }
+}
+
+async function handleHitlDecision(hitl, approved) {
+  if (!state.selectedClusterId) return;
+  if (!canOperate()) {
+    hitl.status = "failed";
+    hitl.outcomeMessage = `Role '${state.userRole}' lacks Operator/Admin permission.`;
+    renderAIChatMessages();
+    return;
+  }
+
+  if (!approved) {
+    hitl.status = "rejected";
+    hitl.outcomeMessage = "Operator declined rollback.";
+    renderAIChatMessages();
+    await runAGUITurn([
+      {
+        role: "tool",
+        toolCallId: hitl.toolCallId || "hitl-rollback",
+        content: JSON.stringify({
+          ok: false,
+          approved: false,
+          message: `Operator (${state.userSubject}) rejected rollback of ${hitl.workload_type}/${hitl.name} in namespace ${hitl.namespace}.`,
+        }),
+      },
+    ]);
+    return;
+  }
+
+  hitl.status = "executing";
+  renderAIChatMessages();
+  try {
+    const res = await api.rollbackWorkload(
+      state.selectedClusterId,
+      hitl.namespace,
+      hitl.workload_type,
+      hitl.name,
+      hitl.to_revision || null
+    );
+    hitl.status = "approved";
+    hitl.outcomeMessage = res.message || `Rolled back ${hitl.workload_type}/${hitl.name}`;
+    renderAIChatMessages();
+    if (state.activeView === "workloads" || state.activeView === "diagnostics" || state.activeView === "overview") {
+      loadActiveView();
+    }
+    await runAGUITurn([
+      {
+        role: "tool",
+        toolCallId: hitl.toolCallId || "hitl-rollback",
+        content: JSON.stringify({ ok: true, approved: true, rollback_result: res }),
+      },
+    ]);
+  } catch (err) {
+    hitl.status = "failed";
+    hitl.outcomeMessage = err.message || "Rollback failed.";
+    renderAIChatMessages();
+  }
+}
+
+async function sendAIChatMessage(overridePrompt = null) {
   const input = $("ai-chat-input");
   const sendBtn = $("ai-chat-send");
-  const message = (input?.value || "").trim();
+  const message = (overridePrompt !== null ? String(overridePrompt) : (input?.value || "")).trim();
   if (!message || !state.selectedClusterId || sendBtn?.disabled) return;
 
   state.aiChatMessages.push({ role: "user", text: message });
-  input.value = "";
-  input.style.height = "auto";
-  if (sendBtn) sendBtn.disabled = true;
-  renderAIChatMessages();
-
-  const pending = { role: "pending", text: "Thinking…" };
-  state.aiChatMessages.push(pending);
-  renderAIChatMessages();
-
-  try {
-    const result = await api.aiChat(state.selectedClusterId, { message, sessionId: state.aiChatSessionId });
-    state.aiChatMessages.pop(); // drop the pending placeholder
-    if (result.error) {
-      state.aiChatMessages.push({ role: "error", text: result.error });
-    } else {
-      if (result.session_id) state.aiChatSessionId = result.session_id;
-      state.aiChatMessages.push({ role: "assistant", text: result.answer || "No response." });
-    }
-  } catch (err) {
-    state.aiChatMessages.pop();
-    state.aiChatMessages.push({ role: "error", text: err.message || "Request failed." });
-  } finally {
-    if (sendBtn) sendBtn.disabled = false;
-    renderAIChatMessages();
-    input?.focus();
+  if (overridePrompt === null && input) {
+    input.value = "";
+    input.style.height = "auto";
   }
+  renderAIChatMessages();
+  await runAGUITurn([{ role: "user", content: message }]);
 }
 
 function initAIChatPanel() {
   $("ai-chat-fab")?.addEventListener("click", toggleAIChatPanel);
   $("ai-chat-close")?.addEventListener("click", closeAIChatPanel);
-  $("ai-chat-send")?.addEventListener("click", sendAIChatMessage);
+  $("ai-chat-send")?.addEventListener("click", () => sendAIChatMessage());
+  $("ai-chat-stop")?.addEventListener("click", () => {
+    if (aguiAbortController) aguiAbortController.abort();
+  });
   $("ai-chat-clear")?.addEventListener("click", () => {
     resetAIChat();
     $("ai-chat-input")?.focus();
@@ -3954,6 +4449,13 @@ function initAIChatPanel() {
     if (panel) panel.classList.toggle("ai-chat-panel--wide");
   });
 
+  $("agui-quick-prompts")?.addEventListener("click", (e) => {
+    const chip = e.target.closest(".agui-quick-chip");
+    if (!chip) return;
+    const prompt = chip.dataset.prompt;
+    if (prompt) sendAIChatMessage(prompt);
+  });
+
   const input = $("ai-chat-input");
   input?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -3961,7 +4463,6 @@ function initAIChatPanel() {
       sendAIChatMessage();
     }
   });
-  // Auto-grow up to the CSS max-height, then the textarea's own scrollbar takes over.
   input?.addEventListener("input", () => {
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
@@ -4942,6 +5443,9 @@ async function bootstrap() {
   applyRoleVisibility();
   const roleSuffix = status.user?.role ? ` (${status.user.role})` : "";
   $("auth-mode-text").textContent = `auth: ${status.auth_mode}${roleSuffix}`;
+  if (status.protocols?.mcp?.tool_count && $("agui-state-badge")) {
+    $("agui-state-badge").textContent = `${status.protocols.mcp.tool_count} MCP Tools · Live Sync`;
+  }
   if (status.disable_local_provider) {
     const localTab = document.querySelector('.provider-tab[data-provider="local"]');
     if (localTab) localTab.style.display = "none";

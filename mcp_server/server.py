@@ -68,6 +68,35 @@ for _fn in _TOOL_FUNCTIONS:
     mcp.tool(annotations=_READ_ONLY)(_fn)
 
 
+def get_mcp_tool_catalog() -> list[dict]:
+    """Return metadata for all read-only MCP tools exposed by KubeOrbit."""
+    import inspect
+
+    catalog: list[dict] = []
+    for fn in _TOOL_FUNCTIONS:
+        doc = inspect.getdoc(fn) or ""
+        first_line = next((line.strip() for line in doc.splitlines() if line.strip()), "")
+        sig = inspect.signature(fn)
+        params = [
+            {
+                "name": p_name,
+                "required": param.default is inspect.Parameter.empty,
+            }
+            for p_name, param in sig.parameters.items()
+        ]
+        catalog.append(
+            {
+                "name": fn.__name__,
+                "description": first_line,
+                "parameters": params,
+                "read_only": True,
+                "destructive": False,
+                "protocol": "mcp",
+            }
+        )
+    return catalog
+
+
 def main() -> None:
     settings = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)s: %(message)s")

@@ -34,7 +34,7 @@ load_dotenv()  # .env is optional (e.g. Docker sets real env vars instead) -- se
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi import Path as ApiPath
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -220,6 +220,7 @@ async def ready() -> JSONResponse:
 @app.get("/api/status")
 async def status(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
     import ai_agent
+    from mcp_server.server import get_mcp_tool_catalog
 
     store = get_config_store()
     env = get_runtime_env()
@@ -235,6 +236,22 @@ async def status(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any
         "providers": providers_list,
         "cli_binaries": binaries,
         "ai": ai_agent.ensure_vertex_ai_env(),
+        "protocols": {
+            "ag_ui": {
+                "version": "1.0",
+                "transport": "sse",
+                "endpoint": "/api/clusters/{cluster_id}/ai/ag-ui",
+            },
+            "mcp": {
+                "transport": "inprocess+stdio",
+                "read_only": True,
+                "tool_count": len(get_mcp_tool_catalog()),
+            },
+            "adk": {
+                "framework": "google-adk",
+                "streaming": "sse",
+            },
+        },
         "team_count": len(store.teams),
         "cluster_count": store.cluster_count,
         "excluded_namespace_patterns": store.settings.excluded_namespace_patterns,
@@ -1085,6 +1102,55 @@ async def ai_chat(
         user.subject, ctx.cluster.id, req.session_id, "error" not in result,
     )
     return {"cluster_id": ctx.cluster.id, **result}
+
+
+@app.get("/api/mcp/tools")
+async def list_mcp_tools(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return the read-only MCP tool catalog and interactive AG-UI frontend tools."""
+    import ai_agent
+    from mcp_server.server import get_mcp_tool_catalog
+
+    mcp_tools = get_mcp_tool_catalog()
+    return {
+        "protocol": "mcp",
+        "read_only": True,
+        "count": len(mcp_tools),
+        "tools": mcp_tools,
+        "ag_ui_frontend_tools": [fn.__name__ for fn in ai_agent._FRONTEND_UI_TOOLS],
+    }
+
+
+from ai_agent import RunAgentInput, stream_ag_ui_run
+
+
+@app.post("/api/clusters/{cluster_id}/ai/ag-ui")
+async def ai_ag_ui(
+    req: RunAgentInput,
+    ctx: ClusterContext = Depends(get_cluster_context),
+    user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """AG-UI Protocol (v1.0) SSE streaming endpoint for interactive ADK + MCP agent runs."""
+    from mcp_server.client import configure_inprocess_app
+
+    configure_inprocess_app(app)
+    logger.info(
+        "AG-UI stream: user=%s role=%s cluster=%s thread=%s",
+        user.subject, user.role, ctx.cluster.id, req.thread_id or "(new)",
+    )
+    return StreamingResponse(
+        stream_ag_ui_run(
+            ctx.cluster.id,
+            req,
+            user_id=user.subject,
+            user_role=user.role,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-AG-UI-Protocol": "1.0",
+        },
+    )
 
 
 # --------------------------------------------------------------------------- #

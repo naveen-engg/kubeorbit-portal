@@ -2001,3 +2001,254 @@ input[name="onboard-env"]:focus-visible + .env-pill-opt { outline: 2px solid var
   border-color: var(--danger);
   color: #ffffff;
 }
+
+/* -- AG-UI Interactive Protocol (ADK <-> AG-UI <-> MCP) -------------------- */
+.agui-protocol-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+.agui-protocol-bar__badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.agui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.agui-badge--protocol {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.agui-badge--state {
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+.agui-autosync-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg-muted);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.agui-autosync-toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.agui-quick-prompts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+}
+.agui-quick-chip {
+  white-space: nowrap;
+  padding: 4px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--fg-muted);
+  font-size: 0.71rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+.agui-quick-chip:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+.agui-tool-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.agui-tool-chip {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 6px 10px;
+  font-size: 0.74rem;
+}
+.agui-tool-chip__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  color: var(--fg);
+}
+.agui-tool-chip__summary::-webkit-details-marker {
+  display: none;
+}
+.agui-tool-chip__left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.agui-tool-chip__tag {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.64rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.agui-tool-chip__tag--mcp {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.agui-tool-chip__tag--agui {
+  background: color-mix(in srgb, #8b5cf6 18%, transparent);
+  color: #8b5cf6;
+}
+.agui-tool-chip__name {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.73rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agui-tool-chip__status {
+  font-size: 0.69rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+.agui-tool-chip__status.is-running {
+  color: var(--accent);
+}
+.agui-tool-chip__status.is-done {
+  color: #16a34a;
+}
+.agui-tool-chip__status.is-error {
+  color: var(--danger);
+}
+.agui-tool-chip__details {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.69rem;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.agui-action-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-elevated));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+.agui-action-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.agui-action-card__title {
+  font-weight: 700;
+  color: var(--fg);
+}
+.agui-action-card__meta {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  word-break: break-word;
+}
+.agui-hitl-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1.5px solid color-mix(in srgb, var(--warning, #d97706) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning, #d97706) 10%, var(--bg-elevated));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+.agui-hitl-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 800;
+  color: var(--fg);
+}
+.agui-hitl-card__target {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.73rem;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+.agui-hitl-card__reason {
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+.agui-hitl-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.agui-hitl-card__status {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.agui-stream-pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.agui-stream-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: agui-pulse 1s ease-in-out infinite;
+}
+@keyframes agui-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
