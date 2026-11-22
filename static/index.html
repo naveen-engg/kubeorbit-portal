@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>KubeOrbit — Multi-Cloud Cluster Navigator</title>
   <meta name="description" content="Unified GKE / EKS / AKS / Local Kubernetes Multi-Cloud Cluster Navigator" />
-  <link rel="stylesheet" href="/styles.css?v=20261122-agui5" />
+  <link rel="stylesheet" href="/styles.css?v=20261122-agui6" />
 </head>
 <body>
   <div class="app-shell">
@@ -570,6 +570,7 @@
   <button class="ai-fab" id="ai-chat-fab" aria-label="Ask AI about this cluster" title="Ask AI about this cluster">✨</button>
 
   <div class="ai-chat-panel" id="ai-chat-panel" aria-hidden="true">
+    <div class="ai-chat-panel__resizer" id="ai-chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize Ask AI panel" title="Drag to resize panel"></div>
     <div class="ai-chat-panel__header">
       <div style="display:flex;align-items:center;gap:10px;">
         <div style="width:32px;height:32px;border-radius:8px;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
@@ -587,7 +588,7 @@
         <button class="btn btn--icon" id="ai-chat-expand" aria-label="Toggle wide view" title="Expand / collapse panel width">
           <svg class="icon" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
         </button>
-        <button class="btn btn--icon" id="ai-chat-close" aria-label="Close" title="Close">
+        <button class="btn btn--icon" id="ai-chat-close" aria-label="Slide panel closed (keeps chat history)" title="Slide panel closed (keeps chat history)">
           <svg class="icon" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
       </div>
@@ -1083,11 +1084,11 @@
   </dialog>
 
 
-  <script type="module" src="/api.js?v=20261122-agui5"></script>
-  <script type="module" src="/agui.js?v=20261122-agui5"></script>
-  <script type="module" src="/agui_views.js?v=20261122-agui5"></script>
-  <script type="module" src="/components.js?v=20261122-agui5"></script>
-  <script type="module" src="/topology.js?v=20261122-agui5"></script>
-  <script type="module" src="/app.js?v=20261122-agui5"></script>
+  <script type="module" src="/api.js?v=20261122-agui6"></script>
+  <script type="module" src="/agui.js?v=20261122-agui6"></script>
+  <script type="module" src="/agui_views.js?v=20261122-agui6"></script>
+  <script type="module" src="/components.js?v=20261122-agui6"></script>
+  <script type="module" src="/topology.js?v=20261122-agui6"></script>
+  <script type="module" src="/app.js?v=20261122-agui6"></script>
 </body>
 </html>

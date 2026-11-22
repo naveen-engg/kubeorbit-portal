@@ -33,6 +33,7 @@
   /* Accent — Google Blue */
   --accent:       #1A73E8;
   --accent-2:     #0D9488;
+  --ai-panel-width: 440px;
   --accent-fg:    #FFFFFF;
   --accent-soft:  #E8F0FE;
   --ring:         #1A73E8;
@@ -285,7 +286,34 @@ strong, b { font-weight: 700; }
    the clearest case) dragged .app-layout/#main/.view along with it via their
    flex-basis, so #main's own `overflow-y: auto` never actually got a chance
    to engage and the whole *page* scrolled instead of just #main's content. */
-.app-shell { height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+.app-shell {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: margin-right 240ms cubic-bezier(0,0,0,1);
+}
+
+@media (min-width: 1025px) {
+  body.ai-chat-open .app-shell {
+    margin-right: var(--ai-panel-width, 440px);
+  }
+  body.ai-chat-open .ai-fab {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.85);
+  }
+}
+@media (min-width: 1025px) and (max-width: 1380px) {
+  body.ai-chat-open .topbar {
+    flex-wrap: wrap;
+  }
+}
+body.ai-chat-resizing .app-shell,
+body.ai-chat-resizing .ai-chat-panel {
+  transition: none !important;
+  user-select: none;
+}
 
 .topbar {
   min-height: var(--topbar-h);
@@ -841,15 +869,45 @@ select option, .select option {
    vanishing instantly. Off-screen state also gets pointer-events:none so
    the transformed-away panel can't intercept clicks on the page behind it. */
 .ai-chat-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 560px; max-width: 94vw;
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: var(--ai-panel-width, 440px); max-width: 94vw;
   background: var(--bg-elevated); border-left: 1px solid var(--border);
   box-shadow: var(--shadow-lg); z-index: 95;
   display: flex; flex-direction: column;
   transform: translateX(100%); pointer-events: none;
   transition: transform 240ms cubic-bezier(0,0,0,1), width 200ms ease;
 }
-.ai-chat-panel.ai-chat-panel--wide { width: 820px; max-width: 96vw; }
+.ai-chat-panel.ai-chat-panel--wide { max-width: 96vw; }
 .ai-chat-panel.is-open { transform: translateX(0); pointer-events: auto; }
+.ai-chat-panel__resizer {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+  z-index: 10;
+  touch-action: none;
+}
+.ai-chat-panel__resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 44px;
+  transform: translateY(-50%);
+  border-radius: 99px;
+  background: var(--border-strong);
+  opacity: 0.45;
+  transition: opacity 150ms ease, background 150ms ease, height 150ms ease;
+}
+.ai-chat-panel__resizer:hover::after,
+body.ai-chat-resizing .ai-chat-panel__resizer::after {
+  opacity: 1;
+  background: var(--accent);
+  height: 68px;
+}
 .ai-chat-panel__header {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--border); flex-shrink: 0;
@@ -980,7 +1038,7 @@ select option, .select option {
   overflow: auto; padding: var(--space-5);
   box-shadow: var(--shadow-raised-md);
 }
-.topology-svg { display: block; min-width: 100%; }
+.topology-svg { display: block; width: 100%; max-width: 100%; height: auto; }
 .topo-lane { fill: var(--bg-inset); opacity: 0.6; }
 .topo-lane:nth-of-type(even) { opacity: 0.35; }
 .topo-node { cursor: pointer; }

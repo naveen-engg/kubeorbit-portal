@@ -4,8 +4,8 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
-import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui5";
-import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261122-agui5";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui6";
+import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261122-agui6";
 import {
   h,
   renderInto,
@@ -4373,14 +4373,43 @@ function updateAIChatSubtitle() {
   if (el) el.textContent = state.selectedClusterId ? `Scoped to ${state.selectedClusterId} · AG-UI` : "No cluster selected";
 }
 
+const AI_PANEL_WIDTH_KEY = "kubeorbit_ai_panel_width";
+const AI_PANEL_DEFAULT_WIDTH = 440;
+const AI_PANEL_WIDE_WIDTH = 640;
+
+function clampAIPanelWidth(px) {
+  const maxW = Math.max(360, Math.min(760, Math.round(window.innerWidth * 0.58)));
+  return Math.max(320, Math.min(maxW, Math.round(Number(px) || AI_PANEL_DEFAULT_WIDTH)));
+}
+
+function setAIPanelWidth(px, { persist = true } = {}) {
+  const w = clampAIPanelWidth(px);
+  document.documentElement.style.setProperty("--ai-panel-width", `${w}px`);
+  const panel = $("ai-chat-panel");
+  if (panel) panel.classList.toggle("ai-chat-panel--wide", w >= 560);
+  if (persist) localStorage.setItem(AI_PANEL_WIDTH_KEY, String(w));
+  return w;
+}
+
+function notifyLayoutReflow() {
+  moveNavIndicator(state.activeView);
+  window.dispatchEvent(new Event("resize"));
+  setTimeout(() => {
+    moveNavIndicator(state.activeView);
+    window.dispatchEvent(new Event("resize"));
+  }, 260);
+}
+
 function openAIChatPanel() {
   const panel = $("ai-chat-panel");
   if (!panel) return;
   panel.classList.add("is-open");
   panel.setAttribute("aria-hidden", "false");
+  document.body.classList.add("ai-chat-open");
   updateAIChatSubtitle();
   renderAGUIQuickPrompts();
   renderAIChatMessages();
+  notifyLayoutReflow();
   $("ai-chat-input")?.focus();
 }
 
@@ -4389,6 +4418,8 @@ function closeAIChatPanel() {
   if (!panel) return;
   panel.classList.remove("is-open");
   panel.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("ai-chat-open");
+  notifyLayoutReflow();
 }
 
 function toggleAIChatPanel() {
@@ -4658,6 +4689,9 @@ async function sendAIChatMessage(overridePrompt = null) {
 }
 
 function initAIChatPanel() {
+  const savedWidth = localStorage.getItem(AI_PANEL_WIDTH_KEY);
+  setAIPanelWidth(savedWidth ? Number(savedWidth) : AI_PANEL_DEFAULT_WIDTH, { persist: false });
+
   $("ai-chat-fab")?.addEventListener("click", toggleAIChatPanel);
   $("ai-chat-close")?.addEventListener("click", closeAIChatPanel);
   $("ai-chat-send")?.addEventListener("click", () => sendAIChatMessage());
@@ -4670,8 +4704,37 @@ function initAIChatPanel() {
   });
   $("ai-chat-expand")?.addEventListener("click", () => {
     const panel = $("ai-chat-panel");
-    if (panel) panel.classList.toggle("ai-chat-panel--wide");
+    const isWide = panel?.classList.contains("ai-chat-panel--wide");
+    setAIPanelWidth(isWide ? AI_PANEL_DEFAULT_WIDTH : AI_PANEL_WIDE_WIDTH);
+    notifyLayoutReflow();
   });
+
+  const resizer = $("ai-chat-resizer");
+  if (resizer) {
+    let dragging = false;
+    resizer.addEventListener("pointerdown", (e) => {
+      if (window.innerWidth < 1025) return;
+      dragging = true;
+      document.body.classList.add("ai-chat-resizing");
+      try { resizer.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+    });
+    const stopDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("ai-chat-resizing");
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--ai-panel-width"), 10);
+      setAIPanelWidth(current || AI_PANEL_DEFAULT_WIDTH, { persist: true });
+      notifyLayoutReflow();
+      try { if (e && resizer.hasPointerCapture?.(e.pointerId)) resizer.releasePointerCapture(e.pointerId); } catch {}
+    };
+    window.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      setAIPanelWidth(window.innerWidth - e.clientX, { persist: false });
+    });
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
+  }
 
   renderAGUIQuickPrompts();
   $("agui-quick-prompts")?.addEventListener("click", (e) => {
