@@ -4,7 +4,8 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
-import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui3";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui4";
+import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261122-agui4";
 import {
   h,
   renderInto,
@@ -3996,6 +3997,22 @@ function summarizeUIAction(payload) {
   }
 }
 
+function getAGUIToolCallbacks() {
+  return {
+    onNavigate: (view, ns) => executePortalUIAction({ action: "navigate", view, namespace: ns ?? "" }),
+    onInspectPod: (podName, ns) => openPodInspectorModal(podName, ns || "default"),
+    onOpenLogs: (podName, ns) => openLogsModal(podName, ns || "default"),
+    onOpenManifest: (kind, name, ns) => openManifestModal(kind, name, ns || "default"),
+    onFilter12Step: (ns, step) =>
+      executePortalUIAction({ action: "filter_12step", namespace: ns ?? "", step_number: step || null }),
+    onAskAI: (prompt) => {
+      if (!prompt) return;
+      openAIChatPanel();
+      sendAIChatMessage(prompt);
+    },
+  };
+}
+
 async function openAIDiagnoseModal({ namespace, resourceType, resourceName, question, title } = {}) {
   const modal = $("ai-diagnose-modal");
   const titleEl = $("ai-diagnose-title");
@@ -4041,33 +4058,45 @@ async function openAIDiagnoseModal({ namespace, resourceType, resourceName, ques
       signal: aguiDiagnoseAbortController.signal,
       onEvent: (evt) => {
         if (evt.type === "TOOL_CALL_START") {
-          const isUi = String(evt.toolCallName || "").startsWith("ui_");
+          const toolName = evt.toolCallName || "tool";
+          const isUi = String(toolName).startsWith("ui_");
+          const tc = { id: evt.toolCallId, name: toolName, protocol: isUi ? "ag-ui" : "mcp", argsText: "", resultText: "", status: "running", uiState: {} };
           const statusSpan = h("span", { className: "agui-tool-chip__status is-running" }, "running...");
-          const detailsEl = h("pre", { className: "agui-tool-chip__details" }, "Calling tool...");
+          const scopeSpan = h("span", { className: "agui-tool-chip__scope" }, "");
+          const bodyHost = h("div", { className: "agui-iv-host" });
+          bodyHost.replaceChildren(renderInteractiveToolBody(tc, getAGUIToolCallbacks()));
           const chip = h("details", { className: "agui-tool-chip" }, [
             h("summary", { className: "agui-tool-chip__summary" }, [
               h("span", { className: "agui-tool-chip__left" }, [
                 h("span", { className: `agui-tool-chip__tag agui-tool-chip__tag--${isUi ? "agui" : "mcp"}` }, isUi ? "AG-UI" : "MCP"),
-                h("span", { className: "agui-tool-chip__name" }, evt.toolCallName || "tool"),
+                h("span", { className: "agui-tool-chip__name" }, toolName),
+                scopeSpan,
               ]),
               statusSpan,
             ]),
-            detailsEl,
+            bodyHost,
           ]);
-          toolChips.set(evt.toolCallId, { statusSpan, detailsEl, args: "" });
+          toolChips.set(evt.toolCallId, { tc, statusSpan, scopeSpan, bodyHost });
           toolTimeline.appendChild(chip);
         } else if (evt.type === "TOOL_CALL_ARGS") {
           const rec = toolChips.get(evt.toolCallId);
           if (rec) {
-            rec.args += evt.delta || "";
-            rec.detailsEl.textContent = `Args:\n${rec.args}`;
+            rec.tc.argsText += evt.delta || "";
+            const scope = extractToolScopeLabel(safeJsonParse(rec.tc.argsText));
+            if (scope) rec.scopeSpan.textContent = scope;
+            rec.bodyHost.replaceChildren(renderInteractiveToolBody(rec.tc, getAGUIToolCallbacks()));
           }
         } else if (evt.type === "TOOL_CALL_RESULT") {
           const rec = toolChips.get(evt.toolCallId);
           if (rec) {
-            rec.statusSpan.className = "agui-tool-chip__status is-done";
-            rec.statusSpan.textContent = "done";
-            rec.detailsEl.textContent = `Args:\n${rec.args || "{}"}\n\nResult:\n${evt.content || ""}`;
+            rec.tc.resultText = evt.content || "";
+            const resObj = safeJsonParse(rec.tc.resultText);
+            const argsObj = safeJsonParse(rec.tc.argsText);
+            const isErr = Boolean(resObj && (resObj.ok === false || resObj.error));
+            rec.tc.status = isErr ? "error" : "done";
+            rec.statusSpan.className = `agui-tool-chip__status ${isErr ? "is-error" : "is-done"}`;
+            rec.statusSpan.textContent = summarizeToolResult(rec.tc.name, argsObj, resObj, rec.tc.status);
+            rec.bodyHost.replaceChildren(renderInteractiveToolBody(rec.tc, getAGUIToolCallbacks()));
           }
         } else if (evt.type === "TEXT_MESSAGE_CONTENT") {
           accText += evt.delta || "";
@@ -4102,12 +4131,11 @@ function closeAIDiagnoseModal() {
 
 function renderToolCallChip(tc) {
   const isUi = tc.protocol === "ag-ui";
+  const argsObj = safeJsonParse(tc.argsText);
+  const resObj = safeJsonParse(tc.resultText);
+  const scopeLabel = extractToolScopeLabel(argsObj);
   const statusClass = tc.status === "error" ? "is-error" : tc.status === "done" ? "is-done" : "is-running";
-  const statusLabel = tc.status === "error" ? "failed" : tc.status === "done" ? "done" : "running...";
-  const detailsText = [
-    tc.argsText ? `Args:\n${tc.argsText}` : null,
-    tc.resultText ? `Result:\n${tc.resultText}` : null,
-  ].filter(Boolean).join("\n\n") || "Waiting for output...";
+  const statusLabel = summarizeToolResult(tc.name, argsObj, resObj, tc.status);
 
   const detailsNode = h("details", {
     className: "agui-tool-chip",
@@ -4120,10 +4148,11 @@ function renderToolCallChip(tc) {
       h("span", { className: "agui-tool-chip__left" }, [
         h("span", { className: `agui-tool-chip__tag agui-tool-chip__tag--${isUi ? "agui" : "mcp"}` }, isUi ? "AG-UI" : "MCP"),
         h("span", { className: "agui-tool-chip__name" }, tc.name || "tool"),
-      ]),
+        scopeLabel ? h("span", { className: "agui-tool-chip__scope" }, scopeLabel) : null,
+      ].filter(Boolean)),
       h("span", { className: `agui-tool-chip__status ${statusClass}` }, statusLabel),
     ]),
-    h("pre", { className: "agui-tool-chip__details" }, detailsText),
+    h("div", { className: "agui-iv-host" }, renderInteractiveToolBody(tc, getAGUIToolCallbacks())),
   ]);
   return detailsNode;
 }
@@ -4454,6 +4483,7 @@ async function runAGUITurn(messagesPayload) {
               resultText: "",
               status: "running",
               expanded: false,
+              uiState: {},
             });
             renderAIChatMessages();
             break;
@@ -4462,6 +4492,7 @@ async function runAGUITurn(messagesPayload) {
             const tc = findToolCall(evt.toolCallId);
             if (tc) {
               tc.argsText += evt.delta || "";
+              renderAIChatMessages();
             }
             break;
           }
@@ -4477,7 +4508,7 @@ async function runAGUITurn(messagesPayload) {
               tc.resultText = evt.content || "";
               try {
                 const parsed = JSON.parse(tc.resultText);
-                tc.status = parsed && parsed.ok === false ? "error" : "done";
+                tc.status = parsed && (parsed.ok === false || parsed.error) ? "error" : "done";
               } catch {
                 tc.status = "done";
               }

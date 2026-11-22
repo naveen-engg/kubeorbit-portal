@@ -482,3 +482,27 @@ class TestAGUIHTTPEndpointsAndRBAC:
         assert "List Namespaces" in fn_body
         assert "Services & Ingress" in fn_body
         assert "Helm Releases" in fn_body
+
+    def test_interactive_mcp_tool_renderer_module_wiring(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        agui_views = (root / "static" / "agui_views.js").read_text(encoding="utf-8")
+        app_js = (root / "static" / "app.js").read_text(encoding="utf-8")
+        index_html = (root / "static" / "index.html").read_text(encoding="utf-8")
+
+        for sym in [
+            "export function summarizeToolResult",
+            "export function renderInteractiveToolBody",
+            "get_namespaces",
+            "get_namespace_resources",
+            "get_helm_releases",
+            "get_events",
+            "diagnose_cluster_issues",
+        ]:
+            assert sym in agui_views
+
+        assert "agui_views.js" in app_js
+        assert "renderInteractiveToolBody" in app_js
+        assert "summarizeToolResult" in app_js
+        assert "agui_views.js" in index_html
