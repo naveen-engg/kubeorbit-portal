@@ -18,8 +18,6 @@ Authentication & Model Configuration (GCP Vertex AI first):
        GOOGLE_API_KEY=<gemini-api-key>
        KUBEORBIT_AI_MODEL=gemini-2.5-flash
 """
-from __future__ import annotations
-
 from collections import OrderedDict
 import logging
 import os
@@ -71,6 +69,7 @@ def ensure_vertex_ai_env() -> Dict[str, Any]:
 
     return {
         "enabled": True,
+        "configured": True,
         "backend": backend,
         "model": model_name,
         "project": project if backend == "vertex_ai" else None,
@@ -606,7 +605,7 @@ async def stream_ag_ui_run(
     cfg = ensure_vertex_ai_env()
     run_id = req.run_id or f"run-{_uuid.uuid4().hex[:12]}"
 
-    if not cfg.get("configured"):
+    if not cfg.get("configured", cfg.get("enabled", False)):
         yield encode_ag_ui_event(
             "RUN_STARTED",
             threadId=req.thread_id or f"th-{_uuid.uuid4().hex[:12]}",
@@ -682,7 +681,8 @@ async def stream_ag_ui_run(
     pending_by_name: _Dict[str, _List[str]] = {}
     tools_used: _List[_Dict[str, _Any]] = []
 
-    tok = set_inprocess_user(user_id)
+    uid = (user_id or "portal").strip().lower()
+    tok = set_inprocess_user(uid)
     try:
         try:
             events_iter = runner.run_async(**run_kwargs)

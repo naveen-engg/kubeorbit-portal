@@ -23,6 +23,7 @@ from kube_client.rca import (
     K8S_COMPONENT_CATALOG,
     PIPELINE_STAGE_CATALOG,
     _build_rca_payload,
+    _detect_pipeline_integrations,
     diagnose_cluster_issues,
 )
 from kube_client.topology import get_network_topology
@@ -133,6 +134,83 @@ class TestRca12StepUnit:
         assert res["summary"]["overall_score"] == 100
         assert res["summary"]["active_root_causes"] == 0
         assert res["root_causes"] == []
+        assert res["integrations"]["helm"]["active"] is False
+        assert res["integrations"]["argocd"]["active"] is False
+        assert res["integrations"]["prometheus"]["active"] is False
+        assert res["integrations"]["kubectl"]["primary"] is True
+
+    def test_detect_pipeline_integrations_helm_argocd_prometheus_and_kubectl(self):
+        # 1. Helm release in target namespace -> highlights Helm ONLY, not Argo CD or Prometheus
+        helm_only = _detect_pipeline_integrations(
+            raw_pods=[
+                {
+                    "metadata": {
+                        "name": "hello-storefront-web-abc",
+                        "namespace": "helm-demo",
+                        "labels": {
+                            "app.kubernetes.io/managed-by": "Helm",
+                            "helm.sh/chart": "hello-storefront-0.1.0",
+                        },
+                        "annotations": {"meta.helm.sh/release-name": "hello-storefront"},
+                    }
+                }
+            ],
+            raw_deployments=[],
+            raw_replicasets=[],
+            services=[{"name": "hello-storefront-svc", "namespace": "helm-demo", "labels": {}}],
+            helm_data={
+                "available": True,
+                "items": [{"name": "hello-storefront", "namespace": "helm-demo", "chart": "hello-storefront-0.1.0"}],
+            },
+            namespace="helm-demo",
+        )
+        assert helm_only["helm"]["active"] is True
+        assert helm_only["helm"]["releases"] == ["hello-storefront"]
+        assert helm_only["helm"]["charts"] == ["hello-storefront-0.1.0"]
+        assert helm_only["argocd"]["active"] is False
+        assert helm_only["prometheus"]["active"] is False
+        assert helm_only["kubectl"]["primary"] is False
+
+        # 2. Plain kubectl apply workloads (other Helm releases excluded when scoped to default) -> all inactive
+        plain_kubectl = _detect_pipeline_integrations(
+            raw_pods=[{"metadata": {"name": "nginx-1", "namespace": "default", "labels": {"app": "nginx"}}}],
+            raw_deployments=[{"metadata": {"name": "nginx", "namespace": "default", "labels": {"app": "nginx"}}}],
+            raw_replicasets=[],
+            services=[],
+            helm_data={
+                "available": True,
+                "items": [{"name": "hello-storefront", "namespace": "helm-demo", "chart": "hello-storefront-0.1.0"}],
+            },
+            namespace="default",
+        )
+        assert plain_kubectl["helm"]["active"] is False
+        assert plain_kubectl["argocd"]["active"] is False
+        assert plain_kubectl["prometheus"]["active"] is False
+        assert plain_kubectl["kubectl"]["primary"] is True
+
+        # 3. Argo CD + Prometheus annotations/labels activate them explicitly
+        argo_prom = _detect_pipeline_integrations(
+            raw_pods=[
+                {
+                    "metadata": {
+                        "name": "checkout-api-1",
+                        "namespace": "prod",
+                        "labels": {"argocd.argoproj.io/instance": "checkout-app"},
+                        "annotations": {"prometheus.io/scrape": "true"},
+                    }
+                }
+            ],
+            raw_deployments=[],
+            raw_replicasets=[],
+            services=[],
+            helm_data={"available": False, "items": []},
+            namespace="prod",
+        )
+        assert argo_prom["argocd"]["active"] is True
+        assert argo_prom["argocd"]["apps"] == ["checkout-app"]
+        assert argo_prom["prometheus"]["active"] is True
+        assert argo_prom["prometheus"]["targets"] == ["checkout-api-1"]
+        assert argo_prom["helm"]["active"] is False
 
     @pytest.mark.asyncio
     async def test_diagnose_cluster_issues_maps_steps_9_to_12(self, monkeypatch: pytest.MonkeyPatch):

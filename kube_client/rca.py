@@ -184,12 +184,158 @@ def _infer_component_id(step_num: int) -> str:
     return "datapath-routing"
 
 
+def _default_integrations() -> Dict[str, Any]:
+    return {
+        "helm": {"active": False, "count": 0, "releases": [], "charts": []},
+        "argocd": {"active": False, "count": 0, "apps": []},
+        "prometheus": {"active": False, "count": 0, "targets": []},
+        "kubectl": {"active": True, "primary": True},
+    }
+
+
+async def _safe_get_helm_releases(context: str, kubeconfig: Path) -> Dict[str, Any]:
+    try:
+        from kube_client.resources import get_helm_releases
+
+        res = await get_helm_releases(context, kubeconfig)
+        return res if isinstance(res, dict) else {"available": False, "items": []}
+    except Exception:
+        return {"available": False, "items": []}
+
+
+def _detect_pipeline_integrations(
+    raw_pods: List[Dict[str, Any]],
+    raw_deployments: List[Dict[str, Any]],
+    raw_replicasets: List[Dict[str, Any]],
+    services: List[Dict[str, Any]],
+    helm_data: Optional[Dict[str, Any]],
+    namespace: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Detect active delivery/observability tools (Helm, Argo CD, Prometheus) from live cluster telemetry."""
+    helm_releases: set[str] = set()
+    helm_charts: set[str] = set()
+    helm_detected = False
+
+    argocd_apps: set[str] = set()
+    argocd_detected = False
+
+    prom_targets: set[str] = set()
+    prom_detected = False
+
+    try:
+        store = get_config_store()
+    except Exception:
+        store = None
+
+    for rel in (helm_data or {}).get("items") or []:
+        rel_ns = str(rel.get("namespace") or "")
+        if namespace:
+            if rel_ns != namespace:
+                continue
+        elif store is not None and rel_ns and store.is_namespace_excluded(rel_ns):
+            continue
+        helm_detected = True
+        if rel.get("name"):
+            helm_releases.add(str(rel["name"]))
+        if rel.get("chart"):
+            helm_charts.add(str(rel["chart"]))
+
+    for obj in [*raw_deployments, *raw_replicasets, *raw_pods]:
+        meta = obj.get("metadata") or {}
+        labels = meta.get("labels") or {}
+        annotations = meta.get("annotations") or {}
+        obj_name = str(meta.get("name") or "")
+
+        managed_by = str(labels.get("app.kubernetes.io/managed-by") or "").lower()
+        chart = labels.get("helm.sh/chart")
+        rel_name = annotations.get("meta.helm.sh/release-name")
+        if managed_by == "helm" or chart or rel_name:
+            helm_detected = True
+            if rel_name:
+                helm_releases.add(str(rel_name))
+            elif labels.get("app.kubernetes.io/instance"):
+                helm_releases.add(str(labels["app.kubernetes.io/instance"]))
+            if chart:
+                helm_charts.add(str(chart))
+
+        argo_inst = labels.get("argocd.argoproj.io/instance")
+        argo_track = annotations.get("argocd.argoproj.io/tracking-id")
+        argo_wave = annotations.get("argocd.argoproj.io/sync-wave")
+        managed_fields = meta.get("managedFields") or []
+        has_argo_manager = any(
+            isinstance(mf, dict) and "argocd" in str(mf.get("manager") or "").lower()
+            for mf in managed_fields
+        )
+        if argo_inst or argo_track or argo_wave or has_argo_manager:
+            argocd_detected = True
+            if argo_inst:
+                argocd_apps.add(str(argo_inst))
+            elif argo_track:
+                argocd_apps.add(str(argo_track).split(":", 1)[0])
+
+        if str(annotations.get("prometheus.io/scrape") or "").lower() == "true":
+            prom_detected = True
+            if obj_name:
+                prom_targets.add(obj_name)
+        for lk, lv in labels.items():
+            lk_l = str(lk).lower()
+            lv_l = str(lv).lower()
+            if "prometheus" in lk_l or "prometheus" in lv_l or "monitoring.coreos.com" in lk_l:
+                prom_detected = True
+                if obj_name:
+                    prom_targets.add(obj_name)
+        if "prometheus" in obj_name.lower():
+            prom_detected = True
+            prom_targets.add(obj_name)
+
+    for svc in services or []:
+        svc_name = str(svc.get("name") or "")
+        svc_labels = svc.get("labels") or {}
+        svc_ann = svc.get("annotations") or {}
+        if str(svc_ann.get("prometheus.io/scrape") or "").lower() == "true":
+            prom_detected = True
+            if svc_name:
+                prom_targets.add(f"svc/{svc_name}")
+        for lk, lv in svc_labels.items():
+            if "prometheus" in str(lk).lower() or "prometheus" in str(lv).lower() or "monitoring.coreos.com" in str(lk).lower():
+                prom_detected = True
+                if svc_name:
+                    prom_targets.add(f"svc/{svc_name}")
+        if "prometheus" in svc_name.lower():
+            prom_detected = True
+            prom_targets.add(f"svc/{svc_name}")
+
+    return {
+        "helm": {
+            "active": helm_detected,
+            "count": len(helm_releases) if helm_releases else (1 if helm_detected else 0),
+            "releases": sorted(helm_releases),
+            "charts": sorted(helm_charts),
+        },
+        "argocd": {
+            "active": argocd_detected,
+            "count": len(argocd_apps) if argocd_apps else (1 if argocd_detected else 0),
+            "apps": sorted(argocd_apps),
+        },
+        "prometheus": {
+            "active": prom_detected,
+            "count": len(prom_targets),
+            "targets": sorted(prom_targets),
+        },
+        "kubectl": {
+            "active": True,
+            "primary": not (helm_detected or argocd_detected),
+        },
+    }
+
+
 def _build_rca_payload(
     findings: List[Dict[str, Any]],
     workloads_healthy: int,
     workloads_total: int,
     namespaces_with_workloads: List[str],
     simulated: bool = False,
+    integrations: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     folded_groups: Dict[str, List[Dict[str, Any]]] = {}
     for f in findings:
@@ -293,6 +439,7 @@ def _build_rca_payload(
         "step_counts": step_counts,
         "components": component_summary,
         "pipeline_stages": pipeline_stages,
+        "integrations": integrations or _default_integrations(),
         "root_causes": sorted(
             root_causes,
             key=lambda r: (
@@ -563,12 +710,19 @@ def get_simulated_12_step_rca(namespace: str = "kubeorbit-demo") -> Dict[str, An
     """Build a complete 12-Step RCA response payload with all 12 steps active."""
     ns = namespace or "kubeorbit-demo"
     findings = get_simulated_12_step_findings(ns)
+    sim_integrations = {
+        "helm": {"active": False, "count": 0, "releases": [], "charts": []},
+        "argocd": {"active": True, "count": 1, "apps": ["sample-app"]},
+        "prometheus": {"active": False, "count": 0, "targets": []},
+        "kubectl": {"active": True, "primary": False},
+    }
     return _build_rca_payload(
         findings=findings,
         workloads_healthy=5,
         workloads_total=11,
         namespaces_with_workloads=[ns],
         simulated=True,
+        integrations=sim_integrations,
     )
 
 
@@ -597,7 +751,9 @@ async def diagnose_cluster_issues(
         services,
         configmaps,
         raw_pods,
+        raw_deployments,
         raw_replicasets,
+        helm_data,
     ) = await asyncio.gather(
         get_pods(context, kubeconfig, ns),
         get_events(context, kubeconfig, ns, limit=200),
@@ -608,9 +764,12 @@ async def diagnose_cluster_issues(
         get_services(context, kubeconfig, ns),
         get_configmaps(context, kubeconfig, ns),
         cached_kubectl_list(context, kubeconfig, "pods", ns, ttl),
+        cached_kubectl_list(context, kubeconfig, "deployments", ns, ttl, optional=True),
         cached_kubectl_list(context, kubeconfig, "replicasets", ns, ttl, optional=True),
+        _safe_get_helm_releases(context, kubeconfig),
     )
     raw_pod_items = raw_pods[0]
+    raw_deploy_items = raw_deployments[0]
     raw_rs_items = raw_replicasets[0]
 
     if namespace is None:
@@ -624,6 +783,10 @@ async def diagnose_cluster_issues(
         raw_pod_items = [
             rp for rp in raw_pod_items
             if not store.is_namespace_excluded(rp.get("metadata", {}).get("namespace", ""))
+        ]
+        raw_deploy_items = [
+            rd for rd in raw_deploy_items
+            if not store.is_namespace_excluded(rd.get("metadata", {}).get("namespace", ""))
         ]
         raw_rs_items = [
             rs for rs in raw_rs_items
@@ -1244,6 +1407,14 @@ async def diagnose_cluster_issues(
 
     all_workloads = [*deployments, *statefulsets, *daemonsets]
     workloads_healthy = sum(1 for w in all_workloads if w.get("healthy", True))
+    integrations = _detect_pipeline_integrations(
+        raw_pod_items,
+        raw_deploy_items,
+        raw_rs_items,
+        services,
+        helm_data,
+        namespace=namespace,
+    )
 
     return _build_rca_payload(
         findings=findings,
@@ -1251,4 +1422,5 @@ async def diagnose_cluster_issues(
         workloads_total=len(all_workloads),
         namespaces_with_workloads=namespaces_with_workloads,
         simulated=False,
+        integrations=integrations,
     )

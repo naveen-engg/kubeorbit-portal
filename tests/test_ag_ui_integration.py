@@ -167,6 +167,41 @@ class TestAGUIProtocolModelsAndTools:
         }
         assert ai_agent.ui_propose_rollback("helm-demo", "Pod", "p1", "invalid")["ok"] is False
 
+    @pytest.mark.asyncio
+    async def test_ensure_vertex_ai_env_configured_and_ui_tool_declarations(self, monkeypatch: pytest.MonkeyPatch):
+        from google.adk.tools import FunctionTool
+
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        cfg = ai_agent.ensure_vertex_ai_env()
+        assert cfg["enabled"] is True
+        assert cfg["configured"] is True
+
+        # Every frontend UI tool must expose real runtime annotations (no PEP 563 strings)
+        # so Google GenAI / ADK automatic function calling schema parsing succeeds.
+        for fn in ai_agent._FRONTEND_UI_TOOLS:
+            for param_name, ann in (getattr(fn, "__annotations__", {}) or {}).items():
+                if param_name != "return":
+                    assert not isinstance(ann, str), f"{fn.__name__}.{param_name} has stringified annotation {ann!r}"
+            decl = FunctionTool(fn)._get_declaration()
+            assert decl is not None
+            assert decl.name == fn.__name__
+
+        # stream_ag_ui_run must succeed WITHOUT monkeypatching ensure_vertex_ai_env
+        async def fake_session(sid, user_id="anonymous"):
+            return _FakeSession(sid or "th-real-cfg", user_id=user_id), True
+
+        class _FakeRunner:
+            async def run_async(self, user_id, session_id, new_message):
+                yield _make_adk_event(text="Configured OK", partial=False)
+
+        monkeypatch.setattr(ai_agent, "_get_or_create_session", fake_session)
+        monkeypatch.setattr(ai_agent, "_get_runner", lambda: _FakeRunner())
+
+        req = ai_agent.RunAgentInput(messages=[{"role": "user", "content": "ping"}])
+        events = _parse_sse_events("".join([c async for c in ai_agent.stream_ag_ui_run("obs-sbx", req)]))
+        assert events[-1]["type"] == "RUN_FINISHED"
+        assert "RUN_ERROR" not in [e["type"] for e in events]
+
 
 class TestAGUIStreamingRuntime:
     @pytest.mark.asyncio

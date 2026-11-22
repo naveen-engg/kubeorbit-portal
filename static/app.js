@@ -4,7 +4,7 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
-import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui1";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui2";
 import {
   h,
   renderInto,
@@ -2550,15 +2550,34 @@ function buildKubectlMachineInfographic(data) {
   const providerName = (state.clusterBadge?.provider || "k8s").toUpperCase();
   const activeNs = $("diagnostics-namespace-select")?.value || "";
 
-  // Generate 52 golden-angle points for the etcd cluster-state particle sphere at (200, 145)
+  const integrations = data.integrations || {};
+  const helmInfo = integrations.helm || { active: false, count: 0, releases: [], charts: [] };
+  const argoInfo = integrations.argocd || { active: false, count: 0, apps: [] };
+  const promInfo = integrations.prometheus || { active: false, count: 0, targets: [] };
+
+  const activeDeliveryParts = [];
+  if (helmInfo.active) {
+    const label = helmInfo.releases?.length ? helmInfo.releases.slice(0, 2).join(", ") : `${helmInfo.count || 1} release(s)`;
+    activeDeliveryParts.push(`Helm (${label})`);
+  }
+  if (argoInfo.active) {
+    const label = argoInfo.apps?.length ? argoInfo.apps.slice(0, 2).join(", ") : `${argoInfo.count || 1} app(s)`;
+    activeDeliveryParts.push(`Argo CD (${label})`);
+  }
+  if (!activeDeliveryParts.length) {
+    activeDeliveryParts.push("kubectl");
+  }
+  const deliveryBadgeText = `Delivery: ${activeDeliveryParts.join(" + ")}`;
+
+  // Generate 52 golden-angle points for the etcd cluster-state particle sphere at (200, 118)
   const etcdDots = [];
   for (let i = 0; i < 52; i++) {
-    const r = 46 * Math.sqrt((i + 0.5) / 52);
+    const r = 36 * Math.sqrt((i + 0.5) / 52);
     const theta = i * 2.39996323;
     const dx = (200 + r * Math.cos(theta)).toFixed(1);
-    const dy = (145 + r * Math.sin(theta)).toFixed(1);
-    const dotR = (i % 5 === 0 ? 1.9 : 1.3);
-    const op = (0.45 + 0.5 * (1 - r / 50)).toFixed(2);
+    const dy = (118 + r * Math.sin(theta)).toFixed(1);
+    const dotR = (i % 5 === 0 ? 1.8 : 1.25);
+    const op = (0.45 + 0.5 * (1 - r / 40)).toFixed(2);
     etcdDots.push(`<circle cx="${dx}" cy="${dy}" r="${dotR}" class="km-etcd-dot" opacity="${op}"/>`);
   }
 
@@ -2569,7 +2588,7 @@ function buildKubectlMachineInfographic(data) {
     { num: 3, compId: "kube-apiserver", title: "{rbac-authz}", sub: "are you allowed?", x: 672, y: 266, stalled: countForStep(3) },
     { num: 4, compId: "kube-apiserver", title: "{mutating-admission}", sub: "defaults & injected fields", x: 684, y: 320, stalled: countForStep(4) },
     { num: 5, compId: "kube-apiserver", title: "{schema-validation}", sub: "is it valid as written?", x: 632, y: 372, stalled: countForStep(5) },
-    { num: 6, compId: "etcd", title: "etcd · cluster state", sub: "the Deployment is stored", x: 148, y: 112, stalled: countForStep(6) },
+    { num: 6, compId: "etcd", title: "etcd · cluster state", sub: "the Deployment is stored", x: 152, y: 92, stalled: countForStep(6) },
     { num: 7, compId: "kube-controller-manager", title: "{deployment-controller}", sub: "creates a ReplicaSet", x: 74, y: 230, stalled: countForStep(7) },
     { num: 8, compId: "kube-controller-manager", title: "{replicaset-controller}", sub: "creates Pods (no node yet)", x: 62, y: 278, stalled: countForStep(8) },
     { num: 9, compId: "kube-scheduler", title: "kube-scheduler", sub: "filter → score → bind (Pod gets node)", x: 878, y: 215, stalled: countForStep(9) },
@@ -2585,7 +2604,7 @@ function buildKubectlMachineInfographic(data) {
     { num: 3, compId: "kube-apiserver", d: "M 612 242 Q 646 250 672 266", stalled: countForStep(3) > 0 },
     { num: 4, compId: "kube-apiserver", d: "M 672 266 Q 684 292 684 320", stalled: countForStep(4) > 0 },
     { num: 5, compId: "kube-apiserver", d: "M 684 320 Q 664 352 632 372 L 540 310", stalled: countForStep(5) > 0 },
-    { num: 6, compId: "etcd", d: "M 540 310 Q 370 250 200 145", stalled: countForStep(6) > 0 },
+    { num: 6, compId: "etcd", d: "M 540 310 Q 370 230 200 118", stalled: countForStep(6) > 0 },
     { num: 7, compId: "kube-controller-manager", d: "M 540 310 Q 320 262 74 230", stalled: countForStep(7) > 0 },
     { num: 8, compId: "kube-controller-manager", d: "M 540 310 Q 310 296 62 278", stalled: countForStep(8) > 0 },
     { num: 9, compId: "kube-scheduler", d: "M 540 310 Q 705 236 878 215", stalled: countForStep(9) > 0 },
@@ -2645,6 +2664,50 @@ function buildKubectlMachineInfographic(data) {
 
   const hasAny10Stall = step10AllStalls.length > 0;
 
+  const activeIntegrationWires = [
+    argoInfo.active ? `
+      <path class="km-wire-glow is-argocd-active" d="M 405 128 Q 470 215 540 310" />
+      <path class="km-wire-flow is-argocd-active" d="M 405 128 Q 470 215 540 310" />` : "",
+    helmInfo.active ? `
+      <path class="km-wire-glow is-helm-active" d="M 772 152 Q 655 228 540 310" />
+      <path class="km-wire-flow is-helm-active" d="M 772 152 Q 655 228 540 310" />` : "",
+    promInfo.active ? `
+      <path class="km-wire-glow is-prom-active" d="M 940 112 Q 740 205 540 310" />
+      <path class="km-wire-flow is-prom-active" d="M 940 112 Q 740 205 540 310" />` : "",
+  ].join("");
+
+  const helmTextLabel = helmInfo.releases?.length
+    ? `◈ Helm · ${helmInfo.releases[0]}${helmInfo.releases.length > 1 ? ` +${helmInfo.releases.length - 1}` : ""}`
+    : `◈ Helm (${helmInfo.count || 1})`;
+  const helmBadgeWidth = Math.max(108, helmTextLabel.length * 6.9 + 20);
+  const argoTextLabel = argoInfo.apps?.length
+    ? `◈ Argo CD · ${argoInfo.apps[0]}${argoInfo.apps.length > 1 ? ` +${argoInfo.apps.length - 1}` : ""}`
+    : `◈ Argo CD (${argoInfo.count || 1})`;
+  const argoBadgeWidth = Math.max(114, argoTextLabel.length * 6.9 + 20);
+  const promTextLabel = `◈ Prometheus (${promInfo.count || 1})`;
+  const promBadgeWidth = Math.max(122, promTextLabel.length * 6.9 + 20);
+
+  const activeIntegrationNodes = [
+    argoInfo.active ? `
+      <g class="km-integration-node km-integration-node--argocd" data-nav-view="ecosystem">
+        <title>Detected Argo CD apps: ${escapeHtml((argoInfo.apps || []).join(", ") || "active")} — Click to inspect Ecosystem</title>
+        <rect x="${395 - Math.round(argoBadgeWidth / 2)}" y="114" width="${argoBadgeWidth}" height="24" rx="12" class="km-integration-pill km-integration-pill--argocd" filter="url(#km-neon-glow)" />
+        <text x="395" y="130" text-anchor="middle" class="km-integration-text km-integration-text--argocd">${escapeHtml(argoTextLabel)}</text>
+      </g>` : "",
+    helmInfo.active ? `
+      <g class="km-integration-node km-integration-node--helm" data-nav-view="helm">
+        <title>Detected Helm releases: ${escapeHtml((helmInfo.releases || []).join(", ") || "active")}${helmInfo.charts?.length ? ` (${escapeHtml(helmInfo.charts.join(", "))})` : ""} — Click to open Helm view</title>
+        <rect x="708" y="138" width="${helmBadgeWidth}" height="24" rx="12" class="km-integration-pill km-integration-pill--helm" filter="url(#km-neon-glow)" />
+        <text x="${708 + Math.round(helmBadgeWidth / 2)}" y="154" text-anchor="middle" class="km-integration-text km-integration-text--helm">${escapeHtml(helmTextLabel)}</text>
+      </g>` : "",
+    promInfo.active ? `
+      <g class="km-integration-node km-integration-node--prom">
+        <title>Prometheus metrics/scrape targets detected: ${escapeHtml((promInfo.targets || []).join(", ") || "active")}</title>
+        <rect x="${940 - Math.round(promBadgeWidth / 2)}" y="96" width="${promBadgeWidth}" height="24" rx="12" class="km-integration-pill km-integration-pill--prom" filter="url(#km-neon-glow)" />
+        <text x="940" y="112" text-anchor="middle" class="km-integration-text km-integration-text--prom">${escapeHtml(promTextLabel)}</text>
+      </g>` : "",
+  ].join("");
+
   svgContainer.innerHTML = `
     <svg class="km-svg" viewBox="0 0 1080 615" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -2666,9 +2729,6 @@ function buildKubectlMachineInfographic(data) {
       <g class="km-wire-bg">
         <path d="M 540 46 Q 470 55 425 78" />
         <path d="M 540 46 Q 610 55 660 78" />
-        <path d="M 405 128 Q 470 215 540 310" />
-        <path d="M 768 158 Q 650 235 540 310" />
-        <path d="M 940 112 Q 850 135 768 158" />
         <path d="M 878 215 L 945 176 M 878 215 L 966 212 M 878 215 L 938 258" />
         <path d="M 335 295 L 185 332 M 335 295 L 195 418 M 335 295 L 155 450" />
         <path d="M 292 506 L 165 480 M 292 506 L 145 516 M 292 506 L 185 552 M 292 506 L 312 562 M 292 506 L 420 476 M 292 506 L 442 506" />
@@ -2683,14 +2743,14 @@ function buildKubectlMachineInfographic(data) {
       <circle cx="540" cy="310" r="105" fill="url(#km-hub-grad)" />
 
       <!-- Active 12-Step Animated Neon Bezier Paths -->
-      <g id="km-active-paths">${edgesHtml}</g>
+      <g id="km-active-paths">${edgesHtml}${activeIntegrationWires}</g>
 
-      <!-- Step 6: etcd · cluster state particle sphere (Top-Left) -->
+      <!-- Step 6: etcd · cluster state particle sphere (Top-Left, clear above {deployment-controller}) -->
       <g>
-        <circle cx="200" cy="145" r="50" fill="none" stroke="var(--km-wire-bg)" stroke-dasharray="3 3" />
+        <circle cx="200" cy="118" r="40" fill="none" stroke="var(--km-wire-bg)" stroke-dasharray="3 3" />
         ${etcdDots.join("")}
-        <text x="200" y="214" text-anchor="middle" class="km-svg-title" font-size="13">etcd · cluster state</text>
-        <text x="200" y="230" text-anchor="middle" class="${countForStep(6) ? "km-svg-alert" : "km-svg-sub"}" font-size="10.5">
+        <text x="200" y="174" text-anchor="middle" class="km-svg-title" font-size="13">etcd · cluster state</text>
+        <text x="200" y="189" text-anchor="middle" class="${countForStep(6) ? "km-svg-alert" : "km-svg-sub"}" font-size="10.5">
           the Deployment is stored (${Number(summary.workloads_total || 0)} workloads)
         </text>
       </g>
@@ -2699,9 +2759,7 @@ function buildKubectlMachineInfographic(data) {
       <g font-size="10.5">
         <text x="415" y="81" text-anchor="end" class="km-svg-sat">{~/.kube/config} ●</text>
         <text x="666" y="81" class="km-svg-sat">● {server-side-apply}</text>
-        <text x="395" y="131" class="km-svg-sat">◈ Argo CD</text>
-        <text x="772" y="161" class="km-svg-sat">◈ Helm</text>
-        <text x="946" y="115" class="km-svg-sat">◈ Prometheus</text>
+        ${activeIntegrationNodes}
 
         <!-- kube-scheduler satellites (Step 9) -->
         <text x="952" y="179" class="km-svg-sat">● {filter}</text>
@@ -2784,6 +2842,14 @@ function buildKubectlMachineInfographic(data) {
       selectedStepNumber = selectedStepNumber === sNum ? null : sNum;
       selectedPipelineStageId = null;
       renderDiagnosticsRCA(data);
+    });
+  });
+
+  // Wire up clickable detected integration badges (e.g., Helm / Argo CD)
+  svgContainer.querySelectorAll(".km-integration-node[data-nav-view]").forEach((nodeEl) => {
+    nodeEl.addEventListener("click", () => {
+      const navView = nodeEl.getAttribute("data-nav-view");
+      if (navView) switchView(navView);
     });
   });
 
@@ -2983,7 +3049,7 @@ function buildKubectlMachineInfographic(data) {
           h("span", {}, ".")
         ]),
         h("div", { className: "km-shell__subtitle" },
-          `Cluster: ${clusterName}${activeNs ? ` · Namespace: ${activeNs}` : " · All Namespaces"} · Click any numbered node (1–12), stall card, or K8s component chip below to filter`)
+          `Cluster: ${clusterName}${activeNs ? ` · Namespace: ${activeNs}` : " · All Namespaces"} · ${deliveryBadgeText} · Click any numbered node (1–12), stall card, or K8s component chip below to filter`)
       ]),
       h("div", { className: "km-controls" }, [
         resetFilterBtn,
@@ -4233,6 +4299,17 @@ async function runAGUITurn(messagesPayload) {
 
   const autoSyncEnabled = () => Boolean($("ai-chat-autosync")?.checked);
   const findToolCall = (id) => assistantMsg.toolCalls.find((tc) => tc.id === id);
+  const dropIfEmptyAssistant = () => {
+    const empty =
+      !assistantMsg.text &&
+      assistantMsg.toolCalls.length === 0 &&
+      assistantMsg.uiActions.length === 0 &&
+      assistantMsg.hitlRequests.length === 0;
+    if (empty) {
+      const idx = state.aiChatMessages.indexOf(assistantMsg);
+      if (idx !== -1) state.aiChatMessages.splice(idx, 1);
+    }
+  };
 
   try {
     await aguiClient.run({
@@ -4336,6 +4413,7 @@ async function runAGUITurn(messagesPayload) {
             break;
           case "RUN_ERROR":
             assistantMsg.streaming = false;
+            dropIfEmptyAssistant();
             state.aiChatMessages.push({ role: "error", text: evt.message || "AG-UI run error." });
             renderAIChatMessages();
             break;
@@ -4349,6 +4427,7 @@ async function runAGUITurn(messagesPayload) {
     if (err.name === "AbortError") {
       if (!assistantMsg.text) assistantMsg.text = "_Stream stopped by user._";
     } else {
+      dropIfEmptyAssistant();
       state.aiChatMessages.push({ role: "error", text: err.message || "AG-UI stream failed." });
     }
   } finally {
