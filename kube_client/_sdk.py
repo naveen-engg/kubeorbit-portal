@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,14 +44,49 @@ def read_current_context(kubeconfig_path: Path | str) -> str:
     return ctx
 
 
-_api_client_pool: Dict[str, kubernetes.client.ApiClient] = {}
+_MAX_API_CLIENTS = 32
+_api_client_pool: OrderedDict[str, kubernetes.client.ApiClient] = OrderedDict()
 _pool_lock = threading.Lock()
+
+
+def _close_sdk_client_safely(client: kubernetes.client.ApiClient) -> None:
+    try:
+        client.close()
+    except Exception:
+        pass
+
+
+def evict_sdk_clients_for_cluster(cluster_id: str) -> int:
+    """Close and evict pooled Kubernetes SDK clients belonging to `cluster_id`."""
+    suffix = f"{cluster_id}.yaml"
+    removed = 0
+    with _pool_lock:
+        matching_keys = [
+            key
+            for key in list(_api_client_pool.keys())
+            if key.endswith(f"/{suffix}") or key.endswith(f"\\{suffix}") or key.endswith(f":{suffix}")
+        ]
+        for key in matching_keys:
+            old_client = _api_client_pool.pop(key, None)
+            if old_client is not None:
+                _close_sdk_client_safely(old_client)
+                removed += 1
+    return removed
+
+
+def close_all_sdk_clients() -> None:
+    """Close and drain every pooled Kubernetes SDK client."""
+    with _pool_lock:
+        while _api_client_pool:
+            _, old_client = _api_client_pool.popitem(last=False)
+            _close_sdk_client_safely(old_client)
 
 
 def _get_or_create_sdk_client(context: str, kubeconfig_path: Path) -> kubernetes.client.ApiClient:
     pool_key = f"{context}:{kubeconfig_path.resolve()}"
     with _pool_lock:
         if pool_key in _api_client_pool:
+            _api_client_pool.move_to_end(pool_key)
             return _api_client_pool[pool_key]
 
         cfg_file = str(kubeconfig_path) if kubeconfig_path.exists() else None
@@ -62,6 +98,9 @@ def _get_or_create_sdk_client(context: str, kubeconfig_path: Path) -> kubernetes
         )
         cfg.connection_pool_maxsize = 32
         client = kubernetes.client.ApiClient(configuration=cfg)
+        while len(_api_client_pool) >= _MAX_API_CLIENTS:
+            _, old_client = _api_client_pool.popitem(last=False)
+            _close_sdk_client_safely(old_client)
         _api_client_pool[pool_key] = client
         return client
 

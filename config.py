@@ -20,10 +20,12 @@ import os
 import re
 import tempfile
 import threading
+import time
+import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -31,6 +33,11 @@ from pydantic import BaseModel, Field, field_validator
 logger = logging.getLogger("kubeorbit.config")
 
 _config_write_lock = threading.Lock()
+_store_lock = threading.RLock()
+_SECRET_SYNC_TTL_SEC = float(os.environ.get("KUBEORBIT_SECRET_SYNC_TTL_SEC", "15"))
+_MAX_OPTIMISTIC_RETRIES = 3
+_last_secret_sync_ts: float = 0.0
+_cached_store: Optional["ConfigStore"] = None
 
 DEFAULT_EXCLUDED_NAMESPACE_PATTERNS = [
     "kube-system",
@@ -121,6 +128,10 @@ class ConfigError(Exception):
     """Raised for malformed or unreadable cluster configuration."""
 
 
+class ConfigConflictError(ConfigError):
+    """Raised when an optimistic concurrency check detects a newer config version in Secret Manager."""
+
+
 class ConfigStore:
     """In-memory index over the loaded YAML config, built once at startup."""
 
@@ -198,15 +209,40 @@ class ConfigStore:
         return out
 
 
+def _mutate_config_with_retry(mutator: Callable[[Dict[str, Any]], None]) -> "ConfigStore":
+    """Load, mutate, and atomically persist clusters config with optimistic retry on Secret Manager conflicts."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_OPTIMISTIC_RETRIES):
+        with _config_write_lock:
+            path = get_config_path()
+            raw_dict, expected_version, expected_etag = _load_yaml_with_meta(path)
+            mutator(raw_dict)
+            try:
+                save_config(
+                    raw_dict,
+                    expected_version=expected_version,
+                    expected_etag=expected_etag,
+                )
+                return get_config_store()
+            except ConfigConflictError as exc:
+                last_exc = exc
+                logger.warning(
+                    "Optimistic config conflict on attempt %d/%d, retrying: %s",
+                    attempt + 1,
+                    _MAX_OPTIMISTIC_RETRIES,
+                    exc,
+                )
+        time.sleep(0.05 * (attempt + 1))
+    raise ConfigConflictError(f"Failed to save config after {_MAX_OPTIMISTIC_RETRIES} retries: {last_exc}")
+
+
 def add_cluster_to_config(
     team_id: str,
     team_name: str,
     environment: str,
     cluster_data: Dict[str, Any],
 ) -> ConfigStore:
-    with _config_write_lock:
-        path = get_config_path()
-        raw_dict = _load_yaml(path)
+    def _apply(raw_dict: Dict[str, Any]) -> None:
         teams = raw_dict.setdefault("teams", [])
 
         team_obj = None
@@ -250,16 +286,14 @@ def add_cluster_to_config(
             new_clusters.append(cluster_data)
         env_obj["clusters"] = new_clusters
 
-        save_config(raw_dict)
-        return get_config_store()
+    return _mutate_config_with_retry(_apply)
 
 
 def delete_cluster_from_config(cluster_id: str) -> ConfigStore:
-    with _config_write_lock:
-        path = get_config_path()
-        raw_dict = _load_yaml(path)
+    target = cluster_id.strip().lower()
+
+    def _apply(raw_dict: Dict[str, Any]) -> None:
         teams = raw_dict.get("teams", [])
-        target = cluster_id.strip().lower()
         for t in teams:
             for e in t.get("environments", []):
                 clusters = e.get("clusters", [])
@@ -272,49 +306,66 @@ def delete_cluster_from_config(cluster_id: str) -> ConfigStore:
                     new_clusters.append(c)
                 e["clusters"] = new_clusters
 
-        save_config(raw_dict)
+    store = _mutate_config_with_retry(_apply)
 
-        # Clean up isolated kubeconfig file if it exists (only if cluster_id is URL-safe)
-        if re.match(r"^[a-z0-9][a-z0-9-]*$", target):
-            try:
-                env = get_runtime_env()
-                kcfg_file = env.kubeconfig_home / f"{target}.yaml"
-                if kcfg_file.exists():
-                    kcfg_file.unlink(missing_ok=True)
-            except Exception as exc:
-                logger.warning("Could not delete isolated kubeconfig for '%s': %s", cluster_id, exc)
+    # Clean up isolated kubeconfig file if it exists (only if cluster_id is URL-safe)
+    if re.match(r"^[a-z0-9][a-z0-9-]*$", target):
+        try:
+            env = get_runtime_env()
+            kcfg_file = env.kubeconfig_home / f"{target}.yaml"
+            if kcfg_file.exists():
+                kcfg_file.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("Could not delete isolated kubeconfig for '%s': %s", cluster_id, exc)
 
-        return get_config_store()
+    return store
 
 
-def _load_from_secret_manager() -> Optional[Dict[str, Any]]:
-    if os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() != "true":
-        return None
+def _secret_manager_coords() -> Tuple[str, str]:
     project_id = (
         os.environ.get("GCP_PROJECT_ID")
         or os.environ.get("GOOGLE_CLOUD_PROJECT")
         or "adk-enterprise-observability"
     ).strip()
     secret_id = os.environ.get("GCP_SECRET_NAME", "kubeorbit-clusters-yaml").strip()
+    return project_id, secret_id
+
+
+def _load_from_secret_manager_with_meta() -> Optional[Tuple[Dict[str, Any], Optional[str], Optional[str]]]:
+    if os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() != "true":
+        return None
+    project_id, secret_id = _secret_manager_coords()
     try:
         from google.cloud import secretmanager
         client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+        parent = f"projects/{project_id}/secrets/{secret_id}"
+        etag: Optional[str] = None
+        try:
+            secret_meta = client.get_secret(request={"name": parent})
+            etag = getattr(secret_meta, "etag", None) or None
+        except Exception:
+            etag = None
+        name = f"{parent}/versions/latest"
         response = client.access_secret_version(request={"name": name})
         payload = response.payload.data.decode("UTF-8")
         data = yaml.safe_load(payload) or {}
         if isinstance(data, dict) and "teams" in data:
             logger.info("Loaded config from GCP Secret Manager secret '%s' (project: %s)", secret_id, project_id)
-            return data
+            return data, getattr(response, "name", None), etag
     except Exception as exc:
         logger.warning("Could not load config from GCP Secret Manager (%s): %s", secret_id, exc)
     return None
 
 
-def _load_yaml(path: Path) -> Dict[str, Any]:
-    secret_data = _load_from_secret_manager()
-    if secret_data is not None:
-        return secret_data
+def _load_from_secret_manager() -> Optional[Dict[str, Any]]:
+    res = _load_from_secret_manager_with_meta()
+    return res[0] if res is not None else None
+
+
+def _load_yaml_with_meta(path: Path) -> Tuple[Dict[str, Any], Optional[str], Optional[str]]:
+    secret_res = _load_from_secret_manager_with_meta()
+    if secret_res is not None:
+        return secret_res
 
     if not path.exists():
         raise ConfigError(
@@ -328,14 +379,81 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
         raise ConfigError(f"failed to parse YAML config '{path}': {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"config file '{path}' must contain a top-level mapping")
+    return data, None, None
+
+
+def _load_yaml(path: Path) -> Dict[str, Any]:
+    data, _, _ = _load_yaml_with_meta(path)
     return data
 
 
-def save_config(raw_data: Dict[str, Any]) -> None:
+def _save_to_secret_manager_optimistic(
+    yaml_str: str,
+    expected_version: Optional[str],
+    expected_etag: Optional[str],
+) -> None:
+    """Persist updated clusters YAML to Secret Manager with version/etag conflict detection."""
+    project_id, secret_id = _secret_manager_coords()
+    from google.cloud import secretmanager
+
+    client = secretmanager.SecretManagerServiceClient()
+    parent = f"projects/{project_id}/secrets/{secret_id}"
+
+    if expected_version:
+        latest_resp = client.access_secret_version(request={"name": f"{parent}/versions/latest"})
+        latest_name = getattr(latest_resp, "name", None)
+        if latest_name and latest_name != expected_version:
+            raise ConfigConflictError(
+                f"Secret '{secret_id}' changed concurrently ({expected_version} -> {latest_name})."
+            )
+
+    if expected_etag:
+        try:
+            client.update_secret(
+                request={
+                    "secret": {
+                        "name": parent,
+                        "etag": expected_etag,
+                        "annotations": {"kubeorbit-rev": uuid.uuid4().hex},
+                    },
+                    "update_mask": {"paths": ["annotations"]},
+                }
+            )
+        except Exception as exc:
+            exc_name = type(exc).__name__.lower()
+            exc_str = str(exc).lower()
+            if any(tok in exc_name or tok in exc_str for tok in ("failedprecondition", "aborted", "conflict", "etag", "412", "409")):
+                raise ConfigConflictError(f"Secret '{secret_id}' etag conflict: {exc}") from exc
+            if "permissiondenied" in exc_name or "403" in exc_str:
+                logger.debug("Runner lacks secretmanager.secrets.update; relying on version check: %s", exc)
+            else:
+                logger.debug("Non-fatal update_secret check failure: %s", exc)
+
+    client.add_secret_version(
+        request={"parent": parent, "payload": {"data": yaml_str.encode("UTF-8")}}
+    )
+    logger.info("Saved updated config version to GCP Secret Manager '%s'", secret_id)
+
+
+def save_config(
+    raw_data: Dict[str, Any],
+    *,
+    expected_version: Optional[str] = None,
+    expected_etag: Optional[str] = None,
+) -> None:
     """Atomically save updated config dictionary to local YAML file (and GCP Secret Manager if enabled)."""
     yaml_str = yaml.dump(raw_data, sort_keys=False)
 
-    # 1. Atomic write to local file via temp file in same directory + os.replace
+    # 1. Update GCP Secret Manager BEFORE writing local cache if enabled (so conflicts abort cleanly)
+    if os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() == "true":
+        try:
+            _save_to_secret_manager_optimistic(yaml_str, expected_version, expected_etag)
+        except ConfigConflictError:
+            raise
+        except Exception as exc:
+            logger.warning("Could not save config to GCP Secret Manager: %s", exc)
+
+    # 2. Atomic write to local file via temp file in same directory + os.replace
     path = get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=".clusters-", suffix=".yaml.tmp", dir=str(path.parent))
@@ -352,25 +470,6 @@ def save_config(raw_data: Dict[str, Any]) -> None:
         raise
     logger.info("Saved updated config to local file '%s'", path)
 
-    # 2. Update GCP Secret Manager if explicitly enabled
-    if os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() == "true":
-        project_id = (
-            os.environ.get("GCP_PROJECT_ID")
-            or os.environ.get("GOOGLE_CLOUD_PROJECT")
-            or "adk-enterprise-observability"
-        ).strip()
-        secret_id = os.environ.get("GCP_SECRET_NAME", "kubeorbit-clusters-yaml").strip()
-        try:
-            from google.cloud import secretmanager
-            client = secretmanager.SecretManagerServiceClient()
-            parent = f"projects/{project_id}/secrets/{secret_id}"
-            client.add_secret_version(
-                request={"parent": parent, "payload": {"data": yaml_str.encode("UTF-8")}}
-            )
-            logger.info("Saved updated config version to GCP Secret Manager '%s'", secret_id)
-        except Exception as exc:
-            logger.warning("Could not save config to GCP Secret Manager: %s", exc)
-
     # 3. Reload cached config store
     reload_config_store()
 
@@ -380,26 +479,41 @@ def get_config_path() -> Path:
     return Path(os.environ.get("KUBEORBIT_CONFIG_PATH", "config/clusters.yaml")).resolve()
 
 
-@lru_cache(maxsize=1)
+def _clear_config_store_cache() -> None:
+    global _cached_store, _last_secret_sync_ts
+    with _store_lock:
+        _cached_store = None
+        _last_secret_sync_ts = 0.0
+
+
 def get_config_store() -> ConfigStore:
-    path = get_config_path()
-    raw_dict = _load_yaml(path)
-    try:
-        raw = RawConfigFile.model_validate(raw_dict)
-    except Exception as exc:  # pydantic.ValidationError
-        raise ConfigError(f"invalid config file '{path}': {exc}") from exc
-    store = ConfigStore(raw)
-    logger.info(
-        "Loaded config: %d team(s), %d cluster(s)",
-        len(store.teams),
-        store.cluster_count,
-    )
-    return store
+    global _cached_store, _last_secret_sync_ts
+    use_sm = os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() == "true"
+    with _store_lock:
+        stale = use_sm and _cached_store is not None and (time.monotonic() - _last_secret_sync_ts >= _SECRET_SYNC_TTL_SEC)
+        if _cached_store is None or stale:
+            path = get_config_path()
+            raw_dict = _load_yaml(path)
+            try:
+                raw = RawConfigFile.model_validate(raw_dict)
+            except Exception as exc:  # pydantic.ValidationError
+                raise ConfigError(f"invalid config file '{path}': {exc}") from exc
+            _cached_store = ConfigStore(raw)
+            _last_secret_sync_ts = time.monotonic()
+            logger.info(
+                "Loaded config: %d team(s), %d cluster(s)",
+                len(_cached_store.teams),
+                _cached_store.cluster_count,
+            )
+        return _cached_store
+
+
+get_config_store.cache_clear = _clear_config_store_cache  # type: ignore[attr-defined]
 
 
 def reload_config_store() -> ConfigStore:
     """Clear cached config and reload from Secret Manager or disk."""
-    get_config_store.cache_clear()
+    _clear_config_store_cache()
     return get_config_store()
 
 

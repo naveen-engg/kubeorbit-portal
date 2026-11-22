@@ -2609,27 +2609,32 @@ function buildKubectlMachineInfographic(data) {
   const svgContainer = h("div", { className: "km-canvas-wrap" });
 
   const edgesHtml = stepPaths.map((p) => {
+    const pNum = Number(p.num);
     const cls = p.stalled ? "is-stalled-edge" : "is-healthy-edge";
-    const selCls = isStepHighlighted(p.num, p.compId) ? " is-active-step" : "";
+    const selCls = isStepHighlighted(pNum, p.compId) ? " is-active-step" : "";
     return `
-      <path id="km-glow-${p.num}" class="km-wire-glow ${cls}${selCls}" d="${p.d}" />
-      <path id="km-flow-${p.num}" class="km-wire-flow ${cls}${selCls}" d="${p.d}" />
+      <path id="km-glow-${pNum}" class="km-wire-glow ${cls}${selCls}" d="${escapeHtml(p.d)}" />
+      <path id="km-flow-${pNum}" class="km-wire-flow ${cls}${selCls}" d="${escapeHtml(p.d)}" />
     `;
   }).join("");
 
   const stepBadgesHtml = stepMeta.map((s) => {
-    const hasStall = s.stalled > 0;
-    const isSel = isStepHighlighted(s.num, s.compId);
+    const sNum = Number(s.num);
+    const sX = Number(s.x);
+    const sY = Number(s.y);
+    const sStalled = Number(s.stalled || 0);
+    const hasStall = sStalled > 0;
+    const isSel = isStepHighlighted(sNum, s.compId);
     const badgeColor = isSel ? "#f59e0b" : (hasStall ? "#e11d48" : "#10b981");
     const pulseHtml = (hasStall || isSel)
-      ? `<circle cx="${s.x}" cy="${s.y}" r="12" class="km-pulse-circle" />`
+      ? `<circle cx="${sX}" cy="${sY}" r="12" class="km-pulse-circle" />`
       : "";
     return `
-      <g class="km-step-node" data-step-num="${s.num}" data-comp-id="${s.compId}">
-        <title>Step ${s.num}: ${s.title} (${s.stalled} stalled) — Click to filter</title>
+      <g class="km-step-node" data-step-num="${sNum}" data-comp-id="${escapeHtml(s.compId)}">
+        <title>Step ${sNum}: ${escapeHtml(s.title)} (${sStalled} stalled) — Click to filter</title>
         ${pulseHtml}
-        <circle cx="${s.x}" cy="${s.y}" r="11.5" fill="${badgeColor}" stroke="#ffffff" stroke-width="2" filter="url(#km-neon-glow)" />
-        <text x="${s.x}" y="${s.y + 3.8}" text-anchor="middle" fill="#ffffff" font-size="10.5" font-weight="800" font-family="monospace">${s.num}</text>
+        <circle cx="${sX}" cy="${sY}" r="11.5" fill="${escapeHtml(badgeColor)}" stroke="#ffffff" stroke-width="2" filter="url(#km-neon-glow)" />
+        <text x="${sX}" y="${sY + 3.8}" text-anchor="middle" fill="#ffffff" font-size="10.5" font-weight="800" font-family="monospace">${sNum}</text>
       </g>
     `;
   }).join("");
@@ -2682,7 +2687,7 @@ function buildKubectlMachineInfographic(data) {
         ${etcdDots.join("")}
         <text x="200" y="214" text-anchor="middle" class="km-svg-title" font-size="13">etcd · cluster state</text>
         <text x="200" y="230" text-anchor="middle" class="${countForStep(6) ? "km-svg-alert" : "km-svg-sub"}" font-size="10.5">
-          the Deployment is stored (${summary.workloads_total} workloads)
+          the Deployment is stored (${Number(summary.workloads_total || 0)} workloads)
         </text>
       </g>
 
@@ -2700,7 +2705,7 @@ function buildKubectlMachineInfographic(data) {
         <text x="945" y="261" class="km-svg-sat">● {bind}</text>
         <text x="878" y="245" text-anchor="middle" class="km-svg-title" font-size="13">kube-scheduler</text>
         <text x="878" y="261" text-anchor="middle" class="${step9Stalls.length ? "km-svg-alert" : "km-svg-sub"}" font-size="10.5">
-          filter → score → bind ${step9Stalls.length ? `(${step9Stalls.length} Pending!)` : "(Pod gets a node)"}
+          filter → score → bind ${step9Stalls.length ? `(${Number(step9Stalls.length)} Pending!)` : "(Pod gets a node)"}
         </text>
 
         <!-- kube-controller-manager & satellites (Mid-Left) -->
@@ -2801,11 +2806,13 @@ function buildKubectlMachineInfographic(data) {
         const meta = stepMeta.find((m) => m.num === stepNum);
         const narText = $("km-narrator-text");
         if (meta && narText) {
+          const metaNum = Number(meta.num);
+          const metaStalled = Number(meta.stalled || 0);
           narText.innerHTML = `
-            <span style="font-weight:800;color:var(--km-accent-amber);font-family:var(--font-mono);">STEP ${meta.num} OF 12 · ${escapeHtml(meta.title.toUpperCase())}</span>
+            <span style="font-weight:800;color:var(--km-accent-amber);font-family:var(--font-mono);">STEP ${metaNum} OF 12 · ${escapeHtml(meta.title.toUpperCase())}</span>
             <span>${escapeHtml(meta.sub)}</span>
-            <span style="font-family:var(--font-mono);font-size:0.75rem;padding:2px 8px;border-radius:99px;background:${meta.stalled ? "rgba(225,29,72,0.16)" : "rgba(16,185,129,0.16)"};color:${meta.stalled ? "var(--km-accent-red)" : "var(--km-accent-green)"};">
-              ${meta.stalled ? `⚠ ${meta.stalled} STALLED` : "✓ PASSING"}
+            <span style="font-family:var(--font-mono);font-size:0.75rem;padding:2px 8px;border-radius:99px;background:${metaStalled ? "rgba(225,29,72,0.16)" : "rgba(16,185,129,0.16)"};color:${metaStalled ? "var(--km-accent-red)" : "var(--km-accent-green)"};">
+              ${metaStalled ? `⚠ ${metaStalled} STALLED` : "✓ PASSING"}
             </span>
           `;
         }

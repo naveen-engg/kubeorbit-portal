@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import secrets
 import shutil
 import sys
 from dataclasses import asdict, dataclass, is_dataclass
@@ -262,25 +264,38 @@ class OnboardClusterRequest(BaseModel):
 
 
 class ParseKubeconfigRequest(BaseModel):
-    kubeconfig_path: str = Field("~/.kube/config", description="Path to local kubeconfig file")
-    kubeconfig_content: Optional[str] = Field(None, description="Optional raw kubeconfig YAML content uploaded from browser")
-    filename: Optional[str] = Field(None, description="Optional original filename for uploaded kubeconfig")
+    kubeconfig_path: str = Field("~/.kube/config", max_length=1024, description="Path to local kubeconfig file")
+    kubeconfig_content: Optional[str] = Field(
+        None, max_length=262_144, description="Optional raw kubeconfig YAML content uploaded from browser"
+    )
+    filename: Optional[str] = Field(None, max_length=256, description="Optional original filename for uploaded kubeconfig")
 
 
-def _enforce_provider_policy(provider_name: str) -> None:
-    if provider_name.strip().lower() == "local" and get_runtime_env().disable_local_provider:
-        raise HTTPException(
-            status_code=403,
-            detail="The 'local' kubeconfig provider is disabled in Cloud Run / IAP enterprise mode.",
-        )
+def _enforce_provider_policy(provider_name: str, cluster_config: Optional[Dict[str, Any]] = None) -> None:
+    if provider_name.strip().lower() == "local":
+        if get_runtime_env().disable_local_provider:
+            raise HTTPException(
+                status_code=403,
+                detail="The 'local' kubeconfig provider is disabled in Cloud Run / IAP enterprise mode.",
+            )
+        if cluster_config and cluster_config.get("kubeconfig_path"):
+            from providers.local import validate_safe_kubeconfig_path
+            try:
+                validate_safe_kubeconfig_path(str(cluster_config["kubeconfig_path"]), require_exists=False)
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _invalidate_cluster_caches(cluster_id: str) -> None:
     auth.invalidate_cluster_auth(cluster_id)
     try:
         from kube_client._cache import _cache
+        from kube_client._sdk import evict_sdk_clients_for_cluster
         _cache.invalidate_prefix(f"provider-meta:{cluster_id}")
         _cache.invalidate_prefix(f"cost-estimate:{cluster_id}")
+        evict_sdk_clients_for_cluster(cluster_id)
     except Exception:
         pass
 
@@ -311,7 +326,7 @@ async def test_cluster_connection(
     req: OnboardClusterRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     require_role(user, "admin", team_id=req.team_id)
-    _enforce_provider_policy(req.provider)
+    _enforce_provider_policy(req.provider, req.config)
     from config import ClusterConfig
     cluster_cfg = ClusterConfig(
         id=req.id,
@@ -340,7 +355,7 @@ async def onboard_cluster(
     req: OnboardClusterRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     require_role(user, "admin", team_id=req.team_id)
-    _enforce_provider_policy(req.provider)
+    _enforce_provider_policy(req.provider, req.config)
     from config import add_cluster_to_config
     cluster_data = {
         "id": req.id,
@@ -376,7 +391,7 @@ async def update_cluster(
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     require_role(user, "admin", team_id=req.team_id)
-    _enforce_provider_policy(req.provider)
+    _enforce_provider_policy(req.provider, req.config)
     from config import add_cluster_to_config
     cluster_data = {
         "id": cluster_id,
@@ -431,6 +446,70 @@ async def delete_cluster(
     return {"status": "ok", "teams": store.teams_payload()}
 
 
+def _parse_and_store_kubeconfig(req: ParseKubeconfigRequest) -> Dict[str, Any]:
+    import yaml
+    from providers.local import (
+        MAX_KUBECONFIG_BYTES,
+        validate_safe_kubeconfig_dict,
+        validate_safe_kubeconfig_path,
+    )
+
+    if req.kubeconfig_content is not None:
+        if len(req.kubeconfig_content.encode("utf-8")) > MAX_KUBECONFIG_BYTES:
+            raise HTTPException(status_code=400, detail=f"Kubeconfig exceeds {MAX_KUBECONFIG_BYTES} byte limit.")
+        try:
+            content = yaml.safe_load(req.kubeconfig_content) or {}
+            validate_safe_kubeconfig_dict(content, is_uploaded=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid or unsafe kubeconfig: {str(exc)}")
+        raw_name = Path(req.filename or "uploaded-kubeconfig.yaml").stem
+        safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw_name).strip("-") or "uploaded"
+        dest_dir = get_runtime_env().kubeconfig_home
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path_obj = dest_dir / f"uploaded-{safe_name}-{secrets.token_hex(4)}.yaml"
+        path_obj.write_text(req.kubeconfig_content, encoding="utf-8")
+        try:
+            os.chmod(path_obj, 0o600)
+        except OSError:
+            pass
+    else:
+        try:
+            path_obj = validate_safe_kubeconfig_path(req.kubeconfig_path)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Kubeconfig file not found at: {req.kubeconfig_path}") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            with open(path_obj, "r", encoding="utf-8") as f:
+                content = yaml.safe_load(f) or {}
+            validate_safe_kubeconfig_dict(content, is_uploaded=False)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid or unsafe kubeconfig: {str(exc)}")
+
+    current_ctx = content.get("current-context", "")
+    contexts = []
+    for ctx in content.get("contexts", []):
+        if not isinstance(ctx, dict):
+            continue
+        ctx_name = ctx.get("name", "")
+        cluster_ref = (ctx.get("context") or {}).get("cluster", ctx_name)
+        if ctx_name:
+            contexts.append({"name": ctx_name, "cluster": cluster_ref})
+
+    suggested_id = current_ctx.lower().replace("/", "-").replace(":", "-").replace("_", "-") if current_ctx else ""
+
+    return {
+        "status": "ok",
+        "kubeconfig_path": str(path_obj),
+        "current_context": current_ctx,
+        "contexts": contexts,
+        "suggested_id": suggested_id,
+    }
+
+
 @app.post("/api/admin/clusters/parse-kubeconfig")
 async def parse_kubeconfig(
     req: ParseKubeconfigRequest, user: CurrentUser = Depends(get_current_user)
@@ -441,57 +520,7 @@ async def parse_kubeconfig(
             status_code=403,
             detail="Parsing local server kubeconfig files is disabled in Cloud Run / IAP enterprise mode.",
         )
-
-    if req.kubeconfig_content is not None:
-        import re
-        import yaml
-        try:
-            content = yaml.safe_load(req.kubeconfig_content) or {}
-            if not isinstance(content, dict):
-                raise ValueError("Kubeconfig must be a YAML mapping")
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid kubeconfig YAML: {str(exc)}")
-        raw_name = Path(req.filename or "uploaded-kubeconfig.yaml").stem
-        safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw_name).strip("-") or "uploaded"
-        dest_dir = get_runtime_env().kubeconfig_home
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        path_obj = dest_dir / f"uploaded-{safe_name}.yaml"
-        path_obj.write_text(req.kubeconfig_content, encoding="utf-8")
-    else:
-        raw_path = req.kubeconfig_path.strip()
-        if not raw_path:
-            raw_path = "~/.kube/config"
-        expanded_path = os.path.expanduser(raw_path)
-        path_obj = Path(expanded_path)
-
-        if not path_obj.exists():
-            raise HTTPException(status_code=404, detail=f"Kubeconfig file not found at: {raw_path}")
-
-    try:
-        import yaml
-        with open(path_obj, "r", encoding="utf-8") as f:
-            content = yaml.safe_load(f) or {}
-
-        current_ctx = content.get("current-context", "")
-        contexts = []
-        for ctx in content.get("contexts", []):
-            ctx_name = ctx.get("name", "")
-            cluster_ref = ctx.get("context", {}).get("cluster", ctx_name)
-            if ctx_name:
-                contexts.append({"name": ctx_name, "cluster": cluster_ref})
-
-        # Derive a safe suggested ID from current context
-        suggested_id = current_ctx.lower().replace("/", "-").replace(":", "-").replace("_", "-") if current_ctx else ""
-
-        return {
-            "status": "ok",
-            "kubeconfig_path": str(path_obj),
-            "current_context": current_ctx,
-            "contexts": contexts,
-            "suggested_id": suggested_id,
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse kubeconfig: {str(exc)}")
+    return await asyncio.to_thread(_parse_and_store_kubeconfig, req)
 
 
 # --------------------------------------------------------------------------- #
