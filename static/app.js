@@ -4,7 +4,7 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
-import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui2";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui3";
 import {
   h,
   renderInto,
@@ -329,6 +329,7 @@ async function switchActiveCluster(clusterId) {
     updateClusterBadgeUI(badge);
     setConnStatus("ok");
     await populateNamespaceSelects(clusterId);
+    renderAGUIQuickPrompts();
     await loadActiveView();
     loadClusterPanel(); // sync sidebar active state
   } catch (err) {
@@ -3937,6 +3938,7 @@ function executePortalUIAction(payload) {
     applyNamespaceFilterForView("diagnostics", payload.namespace);
     selectedStepNumber = payload.step_number ? Number(payload.step_number) : null;
     if (state.activeView === "diagnostics") {
+      renderAGUIQuickPrompts();
       loadDiagnosticsRCA();
     } else {
       switchView("diagnostics");
@@ -4227,6 +4229,115 @@ function renderAIChatMessages() {
   container.scrollTop = container.scrollHeight;
 }
 
+function buildPortalQuickPrompts() {
+  const { activeView, namespace } = getActivePortalState();
+  const nsClause = namespace ? ` in namespace '${namespace}'` : "";
+
+  const catalog = {
+    namespaces: {
+      id: "namespaces",
+      label: "List Namespaces",
+      prompt: "List all active namespaces and workload counts in this cluster, then open the Namespaces view.",
+    },
+    services: {
+      id: "services",
+      label: "Services & Ingress",
+      prompt: `List services and ingress routes${nsClause}, flag any service with 0 ready endpoints, and switch to Network Topology.`,
+    },
+    helm: {
+      id: "helm",
+      label: "Helm Releases",
+      prompt: "List all Helm releases, charts, and deployment status in this cluster, and switch to the Helm view.",
+    },
+    diagnostics: {
+      id: "diagnostics",
+      label: "12-Step Diagnostics",
+      prompt: `Summarize any unhealthy pods or stalled workloads across the 12-Step kubectl apply Machine${nsClause}, and open the Diagnostics view.`,
+    },
+    workloads: {
+      id: "workloads",
+      label: "Unhealthy Workloads",
+      prompt: `List Deployments, StatefulSets, DaemonSets, and unhealthy pods${nsClause}, and switch to Workloads.`,
+    },
+    events: {
+      id: "events",
+      label: "Recent Events",
+      prompt: `Summarize recent Warning events${nsClause} and switch to the Events view.`,
+    },
+    nodes: {
+      id: "nodes",
+      label: "Node Capacity",
+      prompt: "Summarize node readiness, taints, and CPU/memory pressure, and switch to Nodes.",
+    },
+    storage: {
+      id: "storage",
+      label: "Storage & PVCs",
+      prompt: `Check PersistentVolumeClaims and StorageClasses${nsClause}, flag any Pending PVCs, and switch to Storage Topology.`,
+    },
+    cost: {
+      id: "cost",
+      label: "Cost Estimate",
+      prompt: "Summarize estimated cluster compute/storage cost and highlight optimization opportunities, then switch to Cost.",
+    },
+    ecosystem: {
+      id: "ecosystem",
+      label: "Ecosystem CRDs",
+      prompt: "List detected platform ecosystem operators/CRDs (cert-manager, Argo CD, KEDA, etc.) and switch to Ecosystem.",
+    },
+  };
+
+  const viewPriorities = {
+    helm: ["helm", "services", "workloads", "namespaces", "events", "diagnostics"],
+    network: ["services", "diagnostics", "namespaces", "workloads", "events", "helm"],
+    diagnostics: ["diagnostics", "workloads", "services", "events", "helm", "namespaces"],
+    workloads: ["workloads", "diagnostics", "services", "namespaces", "events", "helm"],
+    applications: ["services", "workloads", "helm", "namespaces", "diagnostics", "events"],
+    namespaces: ["namespaces", "services", "helm", "workloads", "diagnostics", "events"],
+    events: ["events", "diagnostics", "workloads", "services", "namespaces", "helm"],
+    nodes: ["nodes", "workloads", "cost", "diagnostics", "namespaces", "events"],
+    storage: ["storage", "workloads", "diagnostics", "namespaces", "events", "cost"],
+    cost: ["cost", "nodes", "workloads", "namespaces", "helm", "diagnostics"],
+    ecosystem: ["ecosystem", "helm", "services", "namespaces", "diagnostics", "events"],
+  };
+
+  const defaultOrder = ["namespaces", "services", "helm", "diagnostics", "events", "workloads", "nodes", "storage", "cost", "ecosystem"];
+  const orderedIds = Array.from(new Set([...(viewPriorities[activeView] || []), ...defaultOrder]));
+
+  const prompts = [];
+  if (namespace) {
+    prompts.push({
+      id: "active-ns",
+      label: `Inspect ${namespace}`,
+      prompt: `Summarize pods, services, and any warning events in namespace '${namespace}', and filter the 12-Step kubectl apply Machine to '${namespace}'.`,
+    });
+  }
+  for (const id of orderedIds) {
+    if (catalog[id]) prompts.push(catalog[id]);
+    if (prompts.length >= 6) break;
+  }
+  return prompts;
+}
+
+function renderAGUIQuickPrompts() {
+  const container = $("agui-quick-prompts");
+  if (!container) return;
+  const items = buildPortalQuickPrompts();
+  container.replaceChildren(
+    ...items.map((item) =>
+      h(
+        "button",
+        {
+          type: "button",
+          className: "agui-quick-chip",
+          "data-prompt": item.prompt,
+          title: item.prompt,
+        },
+        item.label
+      )
+    )
+  );
+}
+
 function updateAIChatSubtitle() {
   const el = $("ai-chat-subtitle");
   if (el) el.textContent = state.selectedClusterId ? `Scoped to ${state.selectedClusterId} · AG-UI` : "No cluster selected";
@@ -4238,6 +4349,7 @@ function openAIChatPanel() {
   panel.classList.add("is-open");
   panel.setAttribute("aria-hidden", "false");
   updateAIChatSubtitle();
+  renderAGUIQuickPrompts();
   renderAIChatMessages();
   $("ai-chat-input")?.focus();
 }
@@ -4268,6 +4380,7 @@ function resetAIChat() {
   if (sendBtn) sendBtn.disabled = false;
   if ($("ai-chat-panel")?.classList.contains("is-open")) {
     updateAIChatSubtitle();
+    renderAGUIQuickPrompts();
     renderAIChatMessages();
   }
 }
@@ -4528,6 +4641,7 @@ function initAIChatPanel() {
     if (panel) panel.classList.toggle("ai-chat-panel--wide");
   });
 
+  renderAGUIQuickPrompts();
   $("agui-quick-prompts")?.addEventListener("click", (e) => {
     const chip = e.target.closest(".agui-quick-chip");
     if (!chip) return;
@@ -4584,6 +4698,7 @@ function getResourceMapController() {
     });
 
     $("resourcemap-namespace-select")?.addEventListener("change", () => {
+      renderAGUIQuickPrompts();
       if (state.activeView === "resourcemap") loadResourceMap();
     });
   }
@@ -4709,6 +4824,7 @@ function switchView(view) {
   if (!viewLoaders[view]) return;
   hideNodeTooltip(); // a topology view's hover tooltip would otherwise float, stuck, over an unrelated page
   state.activeView = view;
+  renderAGUIQuickPrompts();
   document.querySelectorAll(".nav-tabs__item, .sidebar-item").forEach((btn) => btn.setAttribute("aria-selected", String(btn.dataset.view === view)));
   const viewAllBtn = $("view-all-clusters-btn");
   if (viewAllBtn) {
@@ -4808,29 +4924,31 @@ function wireStaticControls() {
   });
   $("cluster-select")?.addEventListener("change", onClusterChange);
 
-  $("workloads-namespace-select")?.addEventListener("change", () => state.activeView === "workloads" && loadWorkloads());
+  $("workloads-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "workloads") loadWorkloads(); });
   // Search filters the already-fetched catalogData client-side -- no refetch needed.
   $("workloads-catalog-search")?.addEventListener("input", () => state.activeView === "workloads" && catalogTypeFilter && renderCatalogPanelBody());
   $("workloads-catalog-close")?.addEventListener("click", () => catalogTypeFilter && toggleWorkloadCatalogType(catalogTypeFilter));
-  $("applications-namespace-select")?.addEventListener("change", () => state.activeView === "applications" && loadLogicalApplications());
+  $("applications-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "applications") loadLogicalApplications(); });
   $("diagnostics-namespace-select")?.addEventListener("change", () => {
     selectedPipelineStageId = null;
     selectedStepNumber = null;
     selectedK8sComponentId = null;
+    renderAGUIQuickPrompts();
     if (state.activeView === "diagnostics") loadDiagnosticsRCA();
   });
   $("diagnostics-reanalyze-btn")?.addEventListener("click", () => state.activeView === "diagnostics" && loadDiagnosticsRCA());
   $("audit-type-select")?.addEventListener("change", () => state.activeView === "audit" && loadAuditLogsView());
 
-  $("namespace-select")?.addEventListener("change", () => state.activeView === "namespaces" && loadNamespaces());
+  $("namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "namespaces") loadNamespaces(); });
   $("namespaces-include-system")?.addEventListener("change", async () => {
     await populateNamespaceSelects(state.selectedClusterId);
+    renderAGUIQuickPrompts();
     if (state.activeView === "namespaces") loadNamespaces();
   });
-  $("map-namespace-select")?.addEventListener("change", () => state.activeView === "map" && loadNamespaceMap());
-  $("network-namespace-select")?.addEventListener("change", () => state.activeView === "network" && loadNetworkTopology());
-  $("storage-namespace-select")?.addEventListener("change", () => state.activeView === "storage" && loadStorageTopology());
-  $("events-namespace-select")?.addEventListener("change", () => state.activeView === "events" && loadEvents());
+  $("map-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "map") loadNamespaceMap(); });
+  $("network-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "network") loadNetworkTopology(); });
+  $("storage-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "storage") loadStorageTopology(); });
+  $("events-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "events") loadEvents(); });
 
   $("secret-modal-close")?.addEventListener("click", closeSecretModal);
   $("secret-modal-cancel")?.addEventListener("click", closeSecretModal);

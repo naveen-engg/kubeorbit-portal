@@ -2130,10 +2130,12 @@ input[name="onboard-env"]:focus-visible + .env-pill-opt { outline: 2px solid var
 .agui-quick-prompts {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 7px 14px;
+  max-height: 76px;
+  overflow-y: auto;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
   flex-shrink: 0;
   background: var(--bg-elevated);
 }

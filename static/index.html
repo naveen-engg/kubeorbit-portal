@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>KubeOrbit — Multi-Cloud Cluster Navigator</title>
   <meta name="description" content="Unified GKE / EKS / AKS / Local Kubernetes Multi-Cloud Cluster Navigator" />
-  <link rel="stylesheet" href="/styles.css?v=20261122-agui2" />
+  <link rel="stylesheet" href="/styles.css?v=20261122-agui3" />
 </head>
 <body>
   <div class="app-shell">
@@ -602,11 +602,7 @@
         <span>Auto-Sync UI</span>
       </label>
     </div>
-    <div class="agui-quick-prompts" id="agui-quick-prompts">
-      <button type="button" class="agui-quick-chip" data-prompt="Summarize unhealthy pods and show the 12-Step kubectl apply Machine filtered to unhealthy workloads.">Diagnose Unhealthy + 12-Step</button>
-      <button type="button" class="agui-quick-chip" data-prompt="What Helm releases and pods are running in helm-demo? Switch to the Helm view.">Inspect helm-demo</button>
-      <button type="button" class="agui-quick-chip" data-prompt="Check recent cluster events and switch to Events view.">Recent Events</button>
-    </div>
+    <div class="agui-quick-prompts" id="agui-quick-prompts" aria-label="Portal quick prompts"></div>
     <div class="ai-chat-panel__messages" id="ai-chat-messages">
       <div class="ai-chat-panel__empty" id="ai-chat-empty">
         Ask about the active cluster — streams live via AG-UI (ADK &harr; MCP) and can navigate views, open inspectors, or stage guarded rollbacks.
@@ -1087,10 +1083,10 @@
   </dialog>
 
 
-  <script type="module" src="/api.js?v=20261122-agui2"></script>
-  <script type="module" src="/agui.js?v=20261122-agui2"></script>
-  <script type="module" src="/components.js?v=20261122-agui2"></script>
-  <script type="module" src="/topology.js?v=20261122-agui2"></script>
-  <script type="module" src="/app.js?v=20261122-agui2"></script>
+  <script type="module" src="/api.js?v=20261122-agui3"></script>
+  <script type="module" src="/agui.js?v=20261122-agui3"></script>
+  <script type="module" src="/components.js?v=20261122-agui3"></script>
+  <script type="module" src="/topology.js?v=20261122-agui3"></script>
+  <script type="module" src="/app.js?v=20261122-agui3"></script>
 </body>
 </html>

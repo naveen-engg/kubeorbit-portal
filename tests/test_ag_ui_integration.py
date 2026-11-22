@@ -457,3 +457,28 @@ class TestAGUIHTTPEndpointsAndRBAC:
         ops_hitl = [e for e in ops_events if e["type"] == "CUSTOM" and e["name"] == "kubeorbit:hitl_approval"]
         assert ops_hitl[0]["value"]["allowed"] is True
         assert ops_events[-1]["type"] == "RUN_FINISHED"
+
+    def test_portal_quick_prompts_are_generalized_without_hardcoded_demo_names(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        html = (root / "static" / "index.html").read_text(encoding="utf-8")
+        app_js = (root / "static" / "app.js").read_text(encoding="utf-8")
+
+        marker = 'id="agui-quick-prompts"'
+        assert marker in html
+        start = html.index(marker)
+        snippet = html[start : html.index("</div>", start) + 6]
+        assert "helm-demo" not in snippet
+        assert "kubeorbit-demo" not in snippet
+
+        assert "function buildPortalQuickPrompts()" in app_js
+        assert "function renderAGUIQuickPrompts()" in app_js
+        fn_start = app_js.index("function buildPortalQuickPrompts()")
+        fn_end = app_js.index("function renderAGUIQuickPrompts()")
+        fn_body = app_js[fn_start:fn_end]
+        assert "helm-demo" not in fn_body
+        assert "kubeorbit-demo" not in fn_body
+        assert "List Namespaces" in fn_body
+        assert "Services & Ingress" in fn_body
+        assert "Helm Releases" in fn_body
