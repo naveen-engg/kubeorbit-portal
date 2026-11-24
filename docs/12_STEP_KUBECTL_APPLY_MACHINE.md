@@ -6,8 +6,6 @@
 >
 > KubeOrbit turns this 12-step mental model into a **live, real-time, provider-agnostic radial infographic and automated Root-Cause Analysis (RCA) engine** that works identically across **Google Cloud GKE**, **Amazon EKS**, **Azure AKS**, and **Local Kubernetes**.
 
-![The kubectl apply Machine — 12-Step Control & Data Plane Flow](./images/kubectl_apply_machine.gif)
-
 ---
 
 ## 1. Feature Architecture & End-to-End Data Flow
