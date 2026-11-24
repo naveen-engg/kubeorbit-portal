@@ -3063,7 +3063,7 @@ function buildKubectlMachineInfographic(data) {
     h("div", { className: "km-shell__header" }, [
       h("div", {}, [
         h("div", { className: "km-shell__tag" }, [
-          h("span", {}, "∞ KUBEORBIT 360°"),
+          h("span", {}, "KUBEORBIT LIVE PIPELINE"),
           h("span", { style: "opacity:0.6;" }, "·"),
           h("span", {}, `LIVE ${providerName} CONTROL & DATA PLANE`)
         ]),
@@ -3085,7 +3085,15 @@ function buildKubectlMachineInfographic(data) {
     svgContainer,
     bottomGrid,
     h("div", { className: "km-footer-caption" }, [
-      h("span", {}, "KUBEORBIT 12-STEP RUNBOOK ENGINE · DARK & LIGHT THEME ADAPTIVE"),
+      h("span", {}, [
+        "KUBEORBIT 12-STEP RUNBOOK ENGINE · VISUAL CONCEPT INSPIRED BY ",
+        h("a", {
+          href: "https://infra360.io",
+          target: "_blank",
+          rel: "noopener noreferrer",
+          style: "color:inherit;text-decoration:underline;text-underline-offset:2px;",
+        }, "DEEPAK AGRAWAL (INFRA360.IO)"),
+      ]),
       h("span", {}, "NOTHING TALKS TO ANYTHING. EVERYTHING TALKS TO THE API SERVER.")
     ])
   ]);

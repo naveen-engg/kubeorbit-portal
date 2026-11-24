@@ -153,7 +153,7 @@ KUBEORBIT_MCP_TRANSPORT=streamable-http python -m mcp_server.server
 
 ## 🔬 The 12-Step `kubectl apply` Machine & Autonomous RCA
 
-Built in [`kube_client/rca.py`](./kube_client/rca.py) and documented in [`docs/12_STEP_KUBECTL_APPLY_MACHINE.md`](./docs/12_STEP_KUBECTL_APPLY_MACHINE.md):
+Built in [`kube_client/rca.py`](./kube_client/rca.py) and documented in [`docs/12_STEP_KUBECTL_APPLY_MACHINE.md`](./docs/12_STEP_KUBECTL_APPLY_MACHINE.md) *(visual mental model inspired by Deepak Agrawal's [`infra360.io`](https://infra360.io) infographic, brought to life with real-time Kubernetes API telemetry)*:
 - **End-to-End Pipeline Attribution**: Maps live pods, events, deployments, ReplicaSets, services, NetworkPolicies, and logs onto Steps `1–12`:
   - **Steps 1–6 (Control Plane & Storage)**: `kubectl apply` (`1`) → `authn` (`2`) → `rbac-authz` (`3`) → `mutating-admission` (`4`) → `schema/validating-admission` (`5`) → `etcd` (`6`).
   - **Steps 7–8 (Controllers)**: `deployment-controller` (`7`) → `replicaset-controller` + `pod-security` / `ResourceQuota` (`8`).
@@ -338,6 +338,12 @@ node --check static/agui_views.js
 
 Want **KubeOrbit** deployed privately inside your GCP, AWS, or Azure VPC behind corporate SSO/IAP with zero-key multi-cloud WIF and team onboarding?
 - Open a GitHub Discussion / Issue on [`naveen-engg/kubeorbit-portal`](https://github.com/naveen-engg/kubeorbit-portal), or reach out directly via LinkedIn / GitHub profile for fixed-scope private enterprise setup sprints, architecture reviews, or platform engineering engagements.
+
+---
+
+## 🙏 Acknowledgments
+
+- **12-Step `kubectl apply` Machine Visual Concept**: Inspired by **Deepak Agrawal** ([`infra360.io`](https://infra360.io)) — KubeOrbit reimagines that 12-step mental model as a live, interactive, multi-cloud diagnostic telemetry SVG and automated Root-Cause Analysis engine.
 
 ---
 

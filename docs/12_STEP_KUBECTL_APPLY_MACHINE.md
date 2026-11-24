@@ -5,6 +5,8 @@
 > When an operator runs `kubectl apply`, **12 distinct control-plane and data-plane steps** execute before traffic reaches a Pod. Most production incidents (`Pending`, `ContainerCreating`, `ImagePullBackOff`, `0/1 Ready`, or `503 Service Unavailable`) occur at a specific handoff between Steps 8 and 12 — not because of invalid YAML syntax.
 >
 > KubeOrbit turns this 12-step mental model into a **live, real-time, provider-agnostic radial infographic and automated Root-Cause Analysis (RCA) engine** that works identically across **Google Cloud GKE**, **Amazon EKS**, **Azure AKS**, and **Local Kubernetes**.
+>
+> *Visual concept credit: Inspired by Deepak Agrawal's ([`infra360.io`](https://infra360.io)) `"The kubectl apply Machine"` infographic.*
 
 ---
 
