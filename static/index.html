@@ -5,7 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>KubeOrbit — Multi-Cloud Cluster Navigator</title>
   <meta name="description" content="Unified GKE / EKS / AKS / Local Kubernetes Multi-Cloud Cluster Navigator" />
-  <link rel="stylesheet" href="/styles.css?v=20261122-agui6" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231A73E8'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23fff' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23fff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css?v=20261124-ro1" />
+  <link rel="modulepreload" href="/api.js" />
+  <link rel="modulepreload" href="/agui.js" />
+  <link rel="modulepreload" href="/agui_views.js" />
+  <link rel="modulepreload" href="/components.js" />
+  <link rel="modulepreload" href="/topology.js" />
+  <link rel="modulepreload" href="/resourcemap.js" />
+  <link rel="modulepreload" href="/helm.js" />
 </head>
 <body>
   <div class="app-shell">
@@ -155,8 +163,9 @@
             <svg class="icon nav-group__caret" viewBox="0 0 24 24" style="width:14px;height:14px;transition:transform 0.2s;transform:rotate(-90deg);"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           <div class="nav-group__items is-collapsed" style="display:flex;flex-direction:column;gap:7px;padding:4px 4px 6px 0.65rem;margin-top:2px;">
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="helm" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>Releases</button>
-            <button class="sidebar-item nav-tabs__item" role="tab" data-view="ecosystem" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Ecosystem &amp; CRDs</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="helm" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/></svg>Releases</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="helm-history" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Version History</button>
+            <button class="sidebar-item nav-tabs__item" role="tab" data-view="helm-diff" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Diff Versions</button>
           </div>
         </div>
 
@@ -181,6 +190,12 @@
             <button class="sidebar-item nav-tabs__item" role="tab" data-view="storage" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" style="width:15px;height:15px;flex-shrink:0;"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>Storage</button>
           </div>
         </div>
+
+        <!-- Ecosystem & CRDs (Standalone Top-Level Pill) -->
+        <button class="sidebar-item nav-tabs__item" role="tab" data-view="ecosystem" aria-selected="false" style="margin-bottom:0.4rem;">
+          <svg class="icon" viewBox="0 0 24 24" style="width:16px;height:16px;flex-shrink:0;"><path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>
+          <span>Ecosystem &amp; CRDs</span>
+        </button>
 
         <!-- Cost Optimization (Standalone Top-Level Pill) -->
         <button class="sidebar-item nav-tabs__item" role="tab" data-view="cost" aria-selected="false" style="margin-bottom:0.4rem;">
@@ -417,10 +432,6 @@
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <select id="diagnostics-namespace-select" class="select" aria-label="Filter 12-Step diagnostics by namespace" style="min-width:190px;"></select>
-            <button id="diagnostics-reanalyze-btn" type="button" class="btn btn--primary" style="display:flex;align-items:center;gap:6px;font-size:0.84rem;padding:7px 14px;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
-              Re-Analyze Cluster
-            </button>
           </div>
         </div>
         <div id="diagnostics-content"></div>
@@ -458,13 +469,27 @@
       </section>
 
       <section id="view-helm" class="view" data-view="helm" hidden>
-        <div class="view-header">
-          <div>
-            <h2>Helm Releases</h2>
-            <span class="view-header__meta">Installed Helm charts and release revisions across namespaces</span>
-          </div>
+        <div class="view-header helm-view-header">
+          <h2>Helm Releases</h2>
+          <span class="helm-view-subtitle">All active Helm releases across the cluster with current versions and status</span>
         </div>
         <div id="helm-content"></div>
+      </section>
+
+      <section id="view-helm-history" class="view" data-view="helm-history" hidden>
+        <div class="view-header helm-view-header">
+          <h2>Helm Version History</h2>
+          <span class="helm-view-subtitle">Complete revision history for Helm releases, showing all versions and changes</span>
+        </div>
+        <div id="helm-history-content"></div>
+      </section>
+
+      <section id="view-helm-diff" class="view" data-view="helm-diff" hidden>
+        <div class="view-header helm-view-header">
+          <h2>Helm Diff Viewer</h2>
+          <span class="helm-view-subtitle">Compare values or rendered manifests between two revisions</span>
+        </div>
+        <div id="helm-diff-content"></div>
       </section>
 
       <section id="view-ecosystem" class="view" data-view="ecosystem" hidden>
@@ -616,21 +641,6 @@
     </div>
   </div>
 
-  <div class="modal-overlay" id="secret-modal" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="secret-modal-title">
-      <div class="modal__header">
-        <span class="modal__title" id="secret-modal-title">Secret</span>
-        <button class="btn btn--icon" id="secret-modal-close" aria-label="Close">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        </button>
-      </div>
-      <div class="modal__body" id="secret-modal-body"></div>
-      <div class="modal__footer">
-        <button class="btn" id="secret-modal-cancel" type="button">Close</button>
-      </div>
-    </div>
-  </div>
-
   <div class="modal-overlay" id="resource-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="resource-modal-title">
       <div class="modal__header">
@@ -685,6 +695,25 @@
       <div class="modal__body" style="padding:0.75rem 1rem;flex:1;overflow:hidden;display:flex;flex-direction:column;background:#0d1117;">
         <pre id="manifest-modal-content" style="flex:1;overflow:auto;margin:0;padding:0.75rem;font-family:var(--font-mono, monospace);font-size:0.82rem;line-height:1.45;color:#7ee787;background:#090d13;border-radius:6px;white-space:pre-wrap;"></pre>
       </div>
+    </div>
+  </div>
+
+  <!-- Helm Release Details Modal -->
+  <div class="modal-overlay" id="helm-details-modal" hidden>
+    <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="helm-details-modal-title" style="max-width:960px;width:96%;max-height:90vh;display:flex;flex-direction:column;">
+      <div class="modal__header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0.9rem 1.25rem;border-bottom:1px solid var(--color-border);flex-wrap:wrap;">
+        <div style="min-width:0;">
+          <span class="modal__title" id="helm-details-modal-title" style="font-weight:700;font-size:1.05rem;">Helm Release Details</span>
+          <div id="helm-details-modal-subtitle" style="font-size:0.76rem;color:var(--fg-subtle);margin-top:2px;">Chart, values, manifest YAML &amp; rendered resources</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div id="helm-details-header-actions" class="helm-actions-row"></div>
+          <button class="btn btn--icon" id="helm-details-modal-close" aria-label="Close">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="modal__body" id="helm-details-modal-body" style="padding:1.15rem 1.25rem;overflow-y:auto;max-height:74vh;"></div>
     </div>
   </div>
 
@@ -1084,11 +1113,6 @@
   </dialog>
 
 
-  <script type="module" src="/api.js?v=20261122-agui6"></script>
-  <script type="module" src="/agui.js?v=20261122-agui6"></script>
-  <script type="module" src="/agui_views.js?v=20261122-agui6"></script>
-  <script type="module" src="/components.js?v=20261122-agui6"></script>
-  <script type="module" src="/topology.js?v=20261122-agui6"></script>
-  <script type="module" src="/app.js?v=20261122-agui6"></script>
+  <script type="module" src="/app.js?v=20261124-ro1"></script>
 </body>
 </html>

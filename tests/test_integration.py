@@ -332,15 +332,20 @@ class TestWorkloadsAndResourcesIntegration:
         assert sec_meta["keys"] == ["API_TOKEN"]
         assert "top-secret-token-123" not in str(sec_meta)
 
-        # Explicit secret reveal decodes value and sets Cache-Control: no-store
+        # Secret reveal endpoint is removed (404/405 via root static mount) and Secret YAML retrieval is blocked (403)
+        from app import app as fastapi_app
+
         rev_res = await async_client.post(
             "/api/clusters/obs-sbx/namespaces/kubeorbit-demo/secrets/app-credentials/reveal"
         )
-        assert rev_res.status_code == 200
-        assert rev_res.headers.get("cache-control") == "no-store"
-        rev_json = rev_res.json()
-        decoded_map = rev_json.get("values") or rev_json.get("data") or {}
-        assert decoded_map["API_TOKEN"] == "top-secret-token-123"
+        assert rev_res.status_code in (404, 405)
+        assert not any(getattr(r, "path", "").endswith("/reveal") for r in fastapi_app.routes)
+
+        for kind_variant in ("Secret", "secrets", "secrets.v1"):
+            yaml_res = await async_client.get(
+                f"/api/clusters/obs-sbx/manifest?kind={kind_variant}&name=app-credentials&namespace=kubeorbit-demo"
+            )
+            assert yaml_res.status_code == 403
 
     @pytest.mark.asyncio
     async def test_applications_topology_and_rollback_audit_flow(
@@ -359,7 +364,11 @@ class TestWorkloadsAndResourcesIntegration:
         assert net_res.status_code == 200
         assert len(net_res.json()["nodes"]) >= 2
 
-        # Rollback workload & verify audit trail entry is created
+        # Opt-in rollback workload & verify audit trail entry is created
+        import config
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
+
         async def fake_rollout_undo(context, kubeconfig, namespace, workload_type, name, to_revision=None):
             return {"status": "ok", "message": f"Rolled back {workload_type}/{name} to {to_revision or 'previous'}"}
 

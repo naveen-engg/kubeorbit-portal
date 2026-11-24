@@ -62,49 +62,56 @@ async def get_namespaces(context: str, kubeconfig_path: Path, include_system: bo
     return sorted(n for n in names if not store.is_namespace_excluded(n))
 
 
-async def get_pods(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:
+async def get_pods(
+    context: str,
+    kubeconfig_path: Path,
+    namespace: Optional[str],
+    include_metrics: bool = True,
+) -> List[Dict[str, Any]]:
     ttl = get_config_store().settings.kube_cache_ttl_seconds
     items, _ = await cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl)
     pods = [_normalize_pod(p) for p in items]
 
-    # Enrich with live `kubectl top pods` metrics when metrics-server is available
-    top_cache_key = f"{context}:top:pods:{namespace or '_all_'}"
+    # Enrich with live `kubectl top pods` metrics when requested and metrics-server is available
+    top_map: Dict[str, Dict[str, Any]] = {}
+    if include_metrics:
+        top_cache_key = f"{context}:top:pods:{namespace or '_all_'}"
 
-    async def _fetch_top_pods() -> Dict[str, Dict[str, Any]]:
-        cmd = ["kubectl", "--kubeconfig", str(kubeconfig_path), "--context", context, "top", "pods", "--no-headers"]
-        if namespace:
-            cmd.extend(["-n", namespace])
-        else:
-            cmd.append("--all-namespaces")
-        try:
-            rc, stdout, _ = await run_cli(cmd, check=False)
-        except Exception:
-            return {}
-        if rc != 0 or not stdout:
-            return {}
-        usage_map: Dict[str, Dict[str, Any]] = {}
-        for line in stdout.strip().splitlines():
-            parts = line.split()
-            if namespace and len(parts) >= 3:
-                p_name, cpu_s, mem_s = parts[0], parts[1], parts[2]
-                key = f"{namespace}/{p_name}"
-            elif not namespace and len(parts) >= 4:
-                p_ns, p_name, cpu_s, mem_s = parts[0], parts[1], parts[2], parts[3]
-                key = f"{p_ns}/{p_name}"
+        async def _fetch_top_pods() -> Dict[str, Dict[str, Any]]:
+            cmd = ["kubectl", "--kubeconfig", str(kubeconfig_path), "--context", context, "top", "pods", "--no-headers"]
+            if namespace:
+                cmd.extend(["-n", namespace])
             else:
-                continue
-            usage_map[key] = {
-                "cpu_m": _parse_cpu_m(cpu_s),
-                "mem_mi": _parse_mem_mi(mem_s),
-                "cpu_str": cpu_s,
-                "mem_str": mem_s,
-            }
-        return usage_map
+                cmd.append("--all-namespaces")
+            try:
+                rc, stdout, _ = await run_cli(cmd, check=False)
+            except Exception:
+                return {}
+            if rc != 0 or not stdout:
+                return {}
+            usage_map: Dict[str, Dict[str, Any]] = {}
+            for line in stdout.strip().splitlines():
+                parts = line.split()
+                if namespace and len(parts) >= 3:
+                    p_name, cpu_s, mem_s = parts[0], parts[1], parts[2]
+                    key = f"{namespace}/{p_name}"
+                elif not namespace and len(parts) >= 4:
+                    p_ns, p_name, cpu_s, mem_s = parts[0], parts[1], parts[2], parts[3]
+                    key = f"{p_ns}/{p_name}"
+                else:
+                    continue
+                usage_map[key] = {
+                    "cpu_m": _parse_cpu_m(cpu_s),
+                    "mem_mi": _parse_mem_mi(mem_s),
+                    "cpu_str": cpu_s,
+                    "mem_str": mem_s,
+                }
+            return usage_map
 
-    try:
-        top_map, _ = await _cache.get_or_set(top_cache_key, ttl, _fetch_top_pods)
-    except Exception:
-        top_map = {}
+        try:
+            top_map, _ = await _cache.get_or_set(top_cache_key, ttl, _fetch_top_pods)
+        except Exception:
+            top_map = {}
 
     for p in pods:
         res = p.get("resources", {})
@@ -176,39 +183,10 @@ async def get_configmaps(context: str, kubeconfig_path: Path, namespace: Optiona
 
 
 async def get_secrets_metadata(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:
-    """Metadata only -- never returns decoded/raw secret values. See reveal_secret()."""
+    """Metadata only -- Secret values and raw YAML retrieval are disabled for security."""
     ttl = get_config_store().settings.kube_cache_ttl_seconds
     items, _ = await cached_kubectl_list(context, kubeconfig_path, "secrets", namespace, ttl)
     return [_normalize_secret_meta(s) for s in items]
-
-
-async def reveal_secret(context: str, kubeconfig_path: Path, namespace: str, name: str) -> Dict[str, Any]:
-    """Explicit, uncached, on-demand decode of a single secret's values.
-
-    Never cached (so a revoked/rotated value is never served stale) and only
-    ever called from the dedicated POST reveal endpoint, which logs who
-    triggered it. Base64-decodes every key; binary values that can't decode
-    as UTF-8 are reported as such rather than returning garbage bytes.
-    """
-    import base64
-
-    data = await kubectl_json(context, kubeconfig_path, ["get", "secret", name, "-n", namespace])
-    if data is None:
-        raise CLIError(["kubectl", "get", "secret", name], None, f"secret '{name}' not found in '{namespace}'")
-    raw = data.get("data", {}) or {}
-    decoded = {}
-    for key, b64_val in raw.items():
-        try:
-            decoded[key] = base64.b64decode(b64_val).decode("utf-8")
-        except (UnicodeDecodeError, ValueError):
-            decoded[key] = "<binary data, cannot display as text>"
-    return {
-        "name": name,
-        "namespace": namespace,
-        "type": data.get("type", "Opaque"),
-        "values": decoded,
-        "revealed_at": time.time(),
-    }
 
 
 async def get_serviceaccounts(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:
@@ -270,37 +248,17 @@ async def get_events(context: str, kubeconfig_path: Path, namespace: Optional[st
     return events[:limit]
 
 
-async def get_helm_releases(context: str, kubeconfig_path: Path) -> Dict[str, Any]:
-    ttl = get_config_store().settings.cluster_meta_cache_ttl_seconds
-    cache_key = f"{context}:helm:releases"
+async def get_helm_releases(
+    context: str,
+    kubeconfig_path: Path,
+    namespace: Optional[str] = None,
+    include_resources: bool = True,
+) -> Dict[str, Any]:
+    from .helm import get_helm_releases as _get_helm_releases
 
-    async def factory():
-        try:
-            _, stdout, _ = await run_cli(
-                ["helm", "list", "--all-namespaces", "--kube-context", context,
-                 "--kubeconfig", str(kubeconfig_path), "-o", "json"],
-            )
-        except BinaryNotFoundError:
-            return {"available": False, "items": []}
-        except CLIError as exc:
-            logger.warning("helm list failed for context %s: %s", context, exc)
-            return {"available": True, "items": [], "error": str(exc)}
-        releases = json.loads(stdout) if stdout.strip() else []
-        return {
-            "available": True,
-            "items": [
-                {
-                    "name": r.get("name"),
-                    "namespace": r.get("namespace"),
-                    "chart": r.get("chart"),
-                    "app_version": r.get("app_version"),
-                    "revision": r.get("revision"),
-                    "status": r.get("status"),
-                    "updated": r.get("updated"),
-                }
-                for r in releases
-            ],
-        }
-
-    result, _ = await _cache.get_or_set(cache_key, ttl, factory)
-    return result
+    return await _get_helm_releases(
+        context,
+        kubeconfig_path,
+        namespace=namespace,
+        include_resources=include_resources,
+    )

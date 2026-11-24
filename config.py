@@ -34,10 +34,12 @@ logger = logging.getLogger("kubeorbit.config")
 
 _config_write_lock = threading.Lock()
 _store_lock = threading.RLock()
-_SECRET_SYNC_TTL_SEC = float(os.environ.get("KUBEORBIT_SECRET_SYNC_TTL_SEC", "15"))
+_SECRET_SYNC_TTL_SEC = float(os.environ.get("KUBEORBIT_SECRET_SYNC_TTL_SEC", "120"))
 _MAX_OPTIMISTIC_RETRIES = 3
 _last_secret_sync_ts: float = 0.0
 _cached_store: Optional["ConfigStore"] = None
+_secret_refresh_in_flight: bool = False
+_config_epoch: int = 0
 
 DEFAULT_EXCLUDED_NAMESPACE_PATTERNS = [
     "kube-system",
@@ -110,9 +112,9 @@ class AppSettings(BaseModel):
     )
     default_refresh_interval_seconds: int = 30
     allowed_refresh_intervals_seconds: List[int] = Field(default_factory=lambda: [15, 30, 60, 120])
-    kube_cache_ttl_seconds: int = 15
+    kube_cache_ttl_seconds: int = 30
     cluster_meta_cache_ttl_seconds: int = 120
-    auth_cache_ttl_seconds: int = 600
+    auth_cache_ttl_seconds: int = 1800
     cli_timeout_seconds: int = 45
     app_correlation_label_keys: List[str] = Field(
         default_factory=lambda: ["app.kubernetes.io/part-of", "app.kubernetes.io/name", "app", "tier"]
@@ -480,31 +482,71 @@ def get_config_path() -> Path:
 
 
 def _clear_config_store_cache() -> None:
-    global _cached_store, _last_secret_sync_ts
+    global _cached_store, _last_secret_sync_ts, _config_epoch
     with _store_lock:
         _cached_store = None
         _last_secret_sync_ts = 0.0
+        _config_epoch += 1
+
+
+def _load_validated_store(path: Path) -> ConfigStore:
+    raw_dict = _load_yaml(path)
+    try:
+        raw = RawConfigFile.model_validate(raw_dict)
+    except Exception as exc:  # pydantic.ValidationError
+        raise ConfigError(f"invalid config file '{path}': {exc}") from exc
+    return ConfigStore(raw)
+
+
+def _schedule_background_config_refresh(epoch: int) -> None:
+    global _secret_refresh_in_flight
+    with _store_lock:
+        if _secret_refresh_in_flight:
+            return
+        _secret_refresh_in_flight = True
+
+    def _worker() -> None:
+        global _cached_store, _last_secret_sync_ts, _secret_refresh_in_flight
+        try:
+            path = get_config_path()
+            fresh_store = _load_validated_store(path)
+            with _store_lock:
+                if _config_epoch == epoch:
+                    _cached_store = fresh_store
+                    _last_secret_sync_ts = time.monotonic()
+                    logger.info(
+                        "Refreshed config in background: %d team(s), %d cluster(s)",
+                        len(_cached_store.teams),
+                        _cached_store.cluster_count,
+                    )
+        except Exception as exc:
+            logger.warning("Background config refresh failed (keeping cached config): %s", exc)
+        finally:
+            with _store_lock:
+                _secret_refresh_in_flight = False
+
+    thread = threading.Thread(target=_worker, name="kubeorbit-config-refresh", daemon=True)
+    thread.start()
 
 
 def get_config_store() -> ConfigStore:
     global _cached_store, _last_secret_sync_ts
     use_sm = os.environ.get("USE_GCP_SECRET_MANAGER", "false").lower() == "true"
     with _store_lock:
-        stale = use_sm and _cached_store is not None and (time.monotonic() - _last_secret_sync_ts >= _SECRET_SYNC_TTL_SEC)
-        if _cached_store is None or stale:
+        if _cached_store is None:
             path = get_config_path()
-            raw_dict = _load_yaml(path)
-            try:
-                raw = RawConfigFile.model_validate(raw_dict)
-            except Exception as exc:  # pydantic.ValidationError
-                raise ConfigError(f"invalid config file '{path}': {exc}") from exc
-            _cached_store = ConfigStore(raw)
+            _cached_store = _load_validated_store(path)
             _last_secret_sync_ts = time.monotonic()
             logger.info(
                 "Loaded config: %d team(s), %d cluster(s)",
                 len(_cached_store.teams),
                 _cached_store.cluster_count,
             )
+            return _cached_store
+
+        stale = use_sm and (time.monotonic() - _last_secret_sync_ts >= _SECRET_SYNC_TTL_SEC)
+        if stale:
+            _schedule_background_config_refresh(_config_epoch)
         return _cached_store
 
 
@@ -550,6 +592,9 @@ class RuntimeEnv:
     )
     strict_rbac: bool = field(
         default_factory=lambda: os.environ.get("KUBEORBIT_STRICT_RBAC", "false").lower() == "true"
+    )
+    read_only_mode: bool = field(
+        default_factory=lambda: os.environ.get("KUBEORBIT_READ_ONLY", "true").lower() != "false"
     )
     gcp_project_id: str = field(
         default_factory=lambda: (

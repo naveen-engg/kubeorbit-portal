@@ -19,7 +19,7 @@ import kubernetes.config
 from kubernetes.client.exceptions import ApiException
 
 from config import get_runtime_env
-from ._cli import CLIError
+from ._cli import CLIError, ResourceTypeUnavailableError
 
 logger = logging.getLogger("kubeorbit.kube_client")
 
@@ -47,6 +47,7 @@ def read_current_context(kubeconfig_path: Path | str) -> str:
 _MAX_API_CLIENTS = 32
 _api_client_pool: OrderedDict[str, kubernetes.client.ApiClient] = OrderedDict()
 _pool_lock = threading.Lock()
+_pool_init_locks: Dict[str, threading.Lock] = {}
 
 
 def _close_sdk_client_safely(client: kubernetes.client.ApiClient) -> None:
@@ -88,6 +89,13 @@ def _get_or_create_sdk_client(context: str, kubeconfig_path: Path) -> kubernetes
         if pool_key in _api_client_pool:
             _api_client_pool.move_to_end(pool_key)
             return _api_client_pool[pool_key]
+        init_lock = _pool_init_locks.setdefault(pool_key, threading.Lock())
+
+    with init_lock:
+        with _pool_lock:
+            if pool_key in _api_client_pool:
+                _api_client_pool.move_to_end(pool_key)
+                return _api_client_pool[pool_key]
 
         cfg_file = str(kubeconfig_path) if kubeconfig_path.exists() else None
         cfg = kubernetes.client.Configuration()
@@ -98,11 +106,22 @@ def _get_or_create_sdk_client(context: str, kubeconfig_path: Path) -> kubernetes
         )
         cfg.connection_pool_maxsize = 32
         client = kubernetes.client.ApiClient(configuration=cfg)
-        while len(_api_client_pool) >= _MAX_API_CLIENTS:
-            _, old_client = _api_client_pool.popitem(last=False)
-            _close_sdk_client_safely(old_client)
-        _api_client_pool[pool_key] = client
-        return client
+
+        with _pool_lock:
+            if pool_key in _api_client_pool:
+                _close_sdk_client_safely(client)
+                _api_client_pool.move_to_end(pool_key)
+                return _api_client_pool[pool_key]
+            while len(_api_client_pool) >= _MAX_API_CLIENTS:
+                _, old_client = _api_client_pool.popitem(last=False)
+                _close_sdk_client_safely(old_client)
+            _api_client_pool[pool_key] = client
+            return client
+
+
+_GATEWAY_API_GATEWAYS = ("gateways", "gateway", "gtw", "gateways.gateway.networking.k8s.io")
+_GATEWAY_API_HTTPROUTES = ("httproutes", "httproute", "httproutes.gateway.networking.k8s.io")
+_GATEWAY_API_RESOURCES = _GATEWAY_API_GATEWAYS + _GATEWAY_API_HTTPROUTES
 
 
 def _sync_sdk_list(
@@ -136,70 +155,138 @@ def _sync_sdk_list(
                 if namespace
                 else api.list_pod_for_all_namespaces(_request_timeout=req_timeout)
             )
-        elif r in ("deployments", "deployment", "deploy"):
+        elif r in ("deployments", "deployment", "deploy", "deployments.apps"):
             api = kubernetes.client.AppsV1Api(api_client=client)
-            raw = api.list_namespaced_deployment(namespace=namespace) if namespace else api.list_deployment_for_all_namespaces()
-        elif r in ("statefulsets", "statefulset", "sts"):
+            raw = (
+                api.list_namespaced_deployment(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_deployment_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("statefulsets", "statefulset", "sts", "statefulsets.apps"):
             api = kubernetes.client.AppsV1Api(api_client=client)
-            raw = api.list_namespaced_stateful_set(namespace=namespace) if namespace else api.list_stateful_set_for_all_namespaces()
-        elif r in ("daemonsets", "daemonset", "ds"):
+            raw = (
+                api.list_namespaced_stateful_set(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_stateful_set_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("daemonsets", "daemonset", "ds", "daemonsets.apps"):
             api = kubernetes.client.AppsV1Api(api_client=client)
-            raw = api.list_namespaced_daemon_set(namespace=namespace) if namespace else api.list_daemon_set_for_all_namespaces()
-        elif r in ("jobs", "job"):
+            raw = (
+                api.list_namespaced_daemon_set(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_daemon_set_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("jobs", "job", "jobs.batch"):
             api = kubernetes.client.BatchV1Api(api_client=client)
-            raw = api.list_namespaced_job(namespace=namespace) if namespace else api.list_job_for_all_namespaces()
-        elif r in ("cronjobs", "cronjob", "cj"):
+            raw = (
+                api.list_namespaced_job(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_job_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("cronjobs", "cronjob", "cj", "cronjobs.batch"):
             api = kubernetes.client.BatchV1Api(api_client=client)
-            raw = api.list_namespaced_cron_job(namespace=namespace) if namespace else api.list_cron_job_for_all_namespaces()
+            raw = (
+                api.list_namespaced_cron_job(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_cron_job_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("services", "service", "svc"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_service(namespace=namespace) if namespace else api.list_service_for_all_namespaces()
+            raw = (
+                api.list_namespaced_service(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_service_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("configmaps", "configmap", "cm"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_config_map(namespace=namespace) if namespace else api.list_config_map_for_all_namespaces()
+            raw = (
+                api.list_namespaced_config_map(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_config_map_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("secrets", "secret"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_secret(namespace=namespace) if namespace else api.list_secret_for_all_namespaces()
+            raw = (
+                api.list_namespaced_secret(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_secret_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("serviceaccounts", "serviceaccount", "sa"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_service_account(namespace=namespace) if namespace else api.list_service_account_for_all_namespaces()
+            raw = (
+                api.list_namespaced_service_account(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_service_account_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("persistentvolumeclaims", "persistentvolumeclaim", "pvcs", "pvc"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_persistent_volume_claim(namespace=namespace) if namespace else api.list_persistent_volume_claim_for_all_namespaces()
+            raw = (
+                api.list_namespaced_persistent_volume_claim(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_persistent_volume_claim_for_all_namespaces(_request_timeout=req_timeout)
+            )
         elif r in ("persistentvolumes", "persistentvolume", "pvs", "pv"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_persistent_volume()
-        elif r in ("storageclasses", "storageclass", "sc"):
+            raw = api.list_persistent_volume(_request_timeout=req_timeout)
+        elif r in ("storageclasses", "storageclass", "sc", "storageclasses.storage.k8s.io"):
             api = kubernetes.client.StorageV1Api(api_client=client)
-            raw = api.list_storage_class()
+            raw = api.list_storage_class(_request_timeout=req_timeout)
         elif r in ("events", "event", "ev"):
             api = kubernetes.client.CoreV1Api(api_client=client)
-            raw = api.list_namespaced_event(namespace=namespace) if namespace else api.list_event_for_all_namespaces()
-        elif r in ("ingresses", "ingress", "ing"):
+            raw = (
+                api.list_namespaced_event(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_event_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("ingresses", "ingress", "ing", "ingresses.networking.k8s.io"):
             api = kubernetes.client.NetworkingV1Api(api_client=client)
-            raw = api.list_namespaced_ingress(namespace=namespace) if namespace else api.list_ingress_for_all_namespaces()
-        elif r in ("replicasets", "replicaset", "rs"):
+            raw = (
+                api.list_namespaced_ingress(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_ingress_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("replicasets", "replicaset", "rs", "replicasets.apps"):
             api = kubernetes.client.AppsV1Api(api_client=client)
-            raw = api.list_namespaced_replica_set(namespace=namespace) if namespace else api.list_replica_set_for_all_namespaces()
-        elif r in ("networkpolicies", "networkpolicy", "netpol"):
+            raw = (
+                api.list_namespaced_replica_set(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_replica_set_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("networkpolicies", "networkpolicy", "netpol", "networkpolicies.networking.k8s.io"):
             api = kubernetes.client.NetworkingV1Api(api_client=client)
-            raw = api.list_namespaced_network_policy(namespace=namespace) if namespace else api.list_network_policy_for_all_namespaces()
-        elif r in ("horizontalpodautoscalers", "horizontalpodautoscaler", "hpa"):
+            raw = (
+                api.list_namespaced_network_policy(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_network_policy_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("horizontalpodautoscalers", "horizontalpodautoscaler", "hpa", "horizontalpodautoscalers.autoscaling"):
             api = kubernetes.client.AutoscalingV2Api(api_client=client)
-            raw = api.list_namespaced_horizontal_pod_autoscaler(namespace=namespace) if namespace else api.list_horizontal_pod_autoscaler_for_all_namespaces()
-        elif r in ("gateways", "gateway", "gtw"):
+            raw = (
+                api.list_namespaced_horizontal_pod_autoscaler(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_horizontal_pod_autoscaler_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in _GATEWAY_API_GATEWAYS:
             api = kubernetes.client.CustomObjectsApi(api_client=client)
             if namespace:
-                raw = api.list_namespaced_custom_object("gateway.networking.k8s.io", "v1", namespace, "gateways")
+                raw = api.list_namespaced_custom_object(
+                    "gateway.networking.k8s.io", "v1", namespace, "gateways", _request_timeout=req_timeout
+                )
             else:
-                raw = api.list_cluster_custom_object("gateway.networking.k8s.io", "v1", "gateways")
+                raw = api.list_cluster_custom_object(
+                    "gateway.networking.k8s.io", "v1", "gateways", _request_timeout=req_timeout
+                )
             return (raw or {}).get("items", []), True
-        elif r in ("httproutes", "httproute"):
+        elif r in _GATEWAY_API_HTTPROUTES:
             api = kubernetes.client.CustomObjectsApi(api_client=client)
             if namespace:
-                raw = api.list_namespaced_custom_object("gateway.networking.k8s.io", "v1", namespace, "httproutes")
+                raw = api.list_namespaced_custom_object(
+                    "gateway.networking.k8s.io", "v1", namespace, "httproutes", _request_timeout=req_timeout
+                )
             else:
-                raw = api.list_cluster_custom_object("gateway.networking.k8s.io", "v1", "httproutes")
+                raw = api.list_cluster_custom_object(
+                    "gateway.networking.k8s.io", "v1", "httproutes", _request_timeout=req_timeout
+                )
             return (raw or {}).get("items", []), True
         else:
             return None, False
@@ -209,6 +296,8 @@ def _sync_sdk_list(
             return (sanitized or {}).get("items", []), True
     except ApiException as e:
         if e.status == 404:
+            if r in _GATEWAY_API_RESOURCES:
+                raise ResourceTypeUnavailableError(f"Resource type '{resource}' is not available on cluster") from e
             return None, False
         logger.debug("SDK list failed for %s (%s), falling back to CLI", resource, e)
         return None, False
@@ -217,3 +306,21 @@ def _sync_sdk_list(
         return None, False
 
     return None, False
+
+
+def _sync_sdk_list_crd_names(context: str, kubeconfig_path: Path) -> Optional[set[str]]:
+    """Return installed CRD names (`<plural>.<group>`) via one lightweight API call,
+    or None if CRD discovery is unavailable/forbidden so callers can fall back cleanly."""
+    try:
+        client = _get_or_create_sdk_client(context, kubeconfig_path)
+        api = kubernetes.client.ApiextensionsV1Api(api_client=client)
+        raw = api.list_custom_resource_definition(_request_timeout=8)
+        items = getattr(raw, "items", None) or []
+        return {
+            item.metadata.name
+            for item in items
+            if getattr(item, "metadata", None) and getattr(item.metadata, "name", None)
+        }
+    except Exception as e:
+        logger.debug("SDK CRD discovery failed for %s (%s), falling back to per-CRD checks", context, e)
+        return None

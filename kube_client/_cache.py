@@ -69,6 +69,26 @@ class TTLCache:
             fut.set_result(value)
         return value, False
 
+    async def get(self, key: str, default: Any = None) -> Any:
+        now_ts = time.time()
+        async with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return default
+            expires_at, value = entry
+            if expires_at <= now_ts:
+                self._store.pop(key, None)
+                return default
+            self._store.move_to_end(key)
+            return value
+
+    async def set(self, key: str, ttl: int, value: Any) -> None:
+        now_write = time.time()
+        async with self._lock:
+            self._store[key] = (now_write + ttl, value)
+            self._store.move_to_end(key)
+            self._prune_locked(now_write)
+
     def invalidate_prefix(self, prefix: str) -> None:
         for key in list(self._store.keys()):
             if key.startswith(prefix):

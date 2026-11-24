@@ -66,22 +66,19 @@ class TestThreeTierRBACAndCloudRunLockout:
         isolated_env: Dict[str, Any],
         monkeypatch: pytest.MonkeyPatch,
     ):
-        # Configure IAP mode + team RBAC in clusters.yaml
+        # Configure IAP mode + team RBAC in clusters.yaml (opt-in rollback enabled for Operator RBAC verification)
         monkeypatch.setenv("KUBEORBIT_AUTH_MODE", "iap")
         monkeypatch.setenv("KUBEORBIT_ADMIN_EMAILS", "superadmin@corp.com")
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
         config.get_runtime_env.cache_clear()
 
         kcfg_home = isolated_env["kubeconfig_home"]
         monkeypatch.setattr("app.build_provider", lambda cfg: MockGKEProvider(cfg, kcfg_home))
 
-        # Mock reveal_secret and rollout_undo
-        async def fake_reveal(ctx, kcfg, ns, name):
-            return {"name": name, "namespace": ns, "type": "Opaque", "values": {"k": "v"}, "revealed_at": 1.0}
-
+        # Mock rollout_undo
         async def fake_rollback(ctx, kcfg, ns, wtype, name, to_revision=None):
             return {"status": "ok", "message": "rolled back"}
 
-        monkeypatch.setattr("kube_client.reveal_secret", fake_reveal)
         monkeypatch.setattr("kube_client.rollout_undo", fake_rollback)
         monkeypatch.setattr("kube_client._fetch._sync_sdk_list", lambda ctx, kcfg, res, ns=None: ([], True))
 
@@ -101,14 +98,19 @@ class TestThreeTierRBACAndCloudRunLockout:
         operator_headers = {"X-Goog-Authenticated-User-Email": "accounts.google.com:sre-operator@corp.com"}
         admin_headers = {"X-Goog-Authenticated-User-Email": "accounts.google.com:teamadmin@corp.com"}
 
-        # --- A. Viewer can read nodes, but CANNOT reveal secrets, rollback, or onboard clusters ---
+        # --- A. Viewer can read nodes, CANNOT rollback or onboard clusters; Secret reveal/YAML are disabled ---
         r_view_nodes = await async_client.get("/api/clusters/obs-sbx/nodes", headers=viewer_headers)
         assert r_view_nodes.status_code == 200
 
         r_view_secret = await async_client.post(
             "/api/clusters/obs-sbx/namespaces/default/secrets/my-sec/reveal", headers=viewer_headers
         )
-        assert r_view_secret.status_code == 403
+        assert r_view_secret.status_code in (404, 405)
+
+        r_view_secret_yaml = await async_client.get(
+            "/api/clusters/obs-sbx/manifest?kind=Secret&name=my-sec&namespace=default", headers=viewer_headers
+        )
+        assert r_view_secret_yaml.status_code == 403
 
         r_view_rb = await async_client.post(
             "/api/clusters/obs-sbx/workloads/deployment/web/rollback?namespace=default",
@@ -120,11 +122,16 @@ class TestThreeTierRBACAndCloudRunLockout:
         r_view_admin = await async_client.delete("/api/admin/clusters/obs-sbx", headers=viewer_headers)
         assert r_view_admin.status_code == 403
 
-        # --- B. Operator CAN reveal secrets and rollback, but CANNOT add/edit/delete clusters ---
+        # --- B. Operator CAN rollback, CANNOT add/edit/delete clusters; Secret reveal/YAML stay disabled ---
         r_op_secret = await async_client.post(
             "/api/clusters/obs-sbx/namespaces/default/secrets/my-sec/reveal", headers=operator_headers
         )
-        assert r_op_secret.status_code == 200
+        assert r_op_secret.status_code in (404, 405)
+
+        r_op_secret_yaml = await async_client.get(
+            "/api/clusters/obs-sbx/manifest?kind=Secret&name=my-sec&namespace=default", headers=operator_headers
+        )
+        assert r_op_secret_yaml.status_code == 403
 
         r_op_rb = await async_client.post(
             "/api/clusters/obs-sbx/workloads/deployment/web/rollback?namespace=default",
@@ -242,33 +249,46 @@ class TestInputSanitizationAndFlagInjection:
 
 
 # =========================================================================== #
-# 4. Audit Trail Completeness (Secret Reveal, Cluster CRUD, Collision-Free IDs)
+# 4. Audit Trail Completeness (Workload Rollback, Cluster CRUD, Collision-Free IDs)
 # =========================================================================== #
 
 
 class TestAuditTrailCompleteness:
     @pytest.mark.asyncio
-    async def test_secret_reveal_and_cluster_crud_recorded_in_audit_logs(
+    async def test_rollback_recorded_in_audit_logs_and_secret_reveal_disabled(
         self,
         async_client: httpx.AsyncClient,
         isolated_env: Dict[str, Any],
         monkeypatch: pytest.MonkeyPatch,
     ):
         kcfg_home = isolated_env["kubeconfig_home"]
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
         monkeypatch.setattr("app.build_provider", lambda cfg: MockGKEProvider(cfg, kcfg_home))
 
-        async def fake_reveal(ctx, kcfg, ns, name):
-            return {"name": name, "namespace": ns, "type": "Opaque", "values": {" secret": "val"}, "revealed_at": 1.0}
+        async def fake_rollback(ctx, kcfg, ns, wtype, name, to_revision=None):
+            return {"status": "ok", "message": "rolled back"}
 
-        monkeypatch.setattr("kube_client.reveal_secret", fake_reveal)
+        monkeypatch.setattr("kube_client.rollout_undo", fake_rollback)
 
+        # Secret reveal route is removed (404/405 via root static mount) and Secret YAML is blocked (403)
         rev = await async_client.post(
             "/api/clusters/obs-sbx/namespaces/kubeorbit-demo/secrets/app-credentials/reveal"
         )
-        assert rev.status_code == 200
+        assert rev.status_code in (404, 405)
+        sec_yaml = await async_client.get(
+            "/api/clusters/obs-sbx/manifest?kind=Secret&name=app-credentials&namespace=kubeorbit-demo"
+        )
+        assert sec_yaml.status_code == 403
+
+        rb = await async_client.post(
+            "/api/clusters/obs-sbx/workloads/deployment/web/rollback?namespace=kubeorbit-demo",
+            json={"to_revision": 1},
+        )
+        assert rb.status_code == 200
 
         logs = get_audit_logs(cluster_id="obs-sbx")
-        assert any(l["action"] == "REVEAL_SECRET" and l["resource"] == "secret/app-credentials" for l in logs)
+        assert any(l["action"] == "ROLLBACK_WORKLOAD" and l["resource"] == "deployment/web" for l in logs)
 
         # Rapid synchronous audit creation never produces duplicate IDs
         e1 = record_audit_event("u1", "ACT", "obs-sbx", "ns", "r1")
@@ -438,15 +458,17 @@ class TestGCPCustomIAMRolesAndStrictZeroTrust:
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "adk-enterprise-observability")
         config.get_runtime_env.cache_clear()
         auth.invalidate_gcp_iam_cache()
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
 
         kcfg_home = isolated_env["kubeconfig_home"]
         monkeypatch.setattr("app.build_provider", lambda cfg: MockGKEProvider(cfg, kcfg_home))
         monkeypatch.setattr("kube_client._fetch._sync_sdk_list", lambda ctx, kcfg, res, ns=None: ([], True))
 
-        async def fake_reveal(ctx, kcfg, ns, name):
-            return {"name": name, "namespace": ns, "type": "Opaque", "values": {"k": "v"}, "revealed_at": 1.0}
+        async def fake_rollback(ctx, kcfg, ns, wtype, name, to_revision=None):
+            return {"status": "ok", "message": "rolled back"}
 
-        monkeypatch.setattr("kube_client.reveal_secret", fake_reveal)
+        monkeypatch.setattr("kube_client.rollout_undo", fake_rollback)
 
         # Mock GCP Cloud Resource Manager getIamPolicy response with our 3 Custom IAM Roles
         fake_gcp_bindings = {
@@ -462,16 +484,18 @@ class TestGCPCustomIAMRolesAndStrictZeroTrust:
         assert r_intruder.status_code == 403
         assert "Zero-Trust" in r_intruder.json()["detail"] or "Forbidden" in r_intruder.json()["detail"]
 
-        # 2. Explicit Gmail Viewer in kubeorbitViewer -> role='viewer', can view status & nodes, 403 on secret reveal
+        # 2. Explicit Gmail Viewer in kubeorbitViewer -> role='viewer', can view status, 403 on rollback
         viewer_headers = {"X-Goog-Authenticated-User-Email": "accounts.google.com:gcp-viewer@gmail.com"}
         r_viewer_status = await async_client.get("/api/status", headers=viewer_headers)
         assert r_viewer_status.status_code == 200
         assert r_viewer_status.json()["user"]["role"] == "viewer"
 
-        r_viewer_sec = await async_client.post(
-            "/api/clusters/obs-sbx/namespaces/default/secrets/my-sec/reveal", headers=viewer_headers
+        r_viewer_rb = await async_client.post(
+            "/api/clusters/obs-sbx/workloads/deployment/web/rollback?namespace=default",
+            json={"to_revision": 1},
+            headers=viewer_headers,
         )
-        assert r_viewer_sec.status_code == 403
+        assert r_viewer_rb.status_code == 403
 
         # 3. Domain-matched Viewer (domain:verifiedcorp.com) -> role='viewer'
         domain_headers = {"X-Goog-Authenticated-User-Email": "accounts.google.com:anyone@verifiedcorp.com"}
@@ -479,16 +503,18 @@ class TestGCPCustomIAMRolesAndStrictZeroTrust:
         assert r_domain_status.status_code == 200
         assert r_domain_status.json()["user"]["role"] == "viewer"
 
-        # 4. Explicit Gmail Operator in kubeorbitOperator -> role='operator', CAN reveal secret, 403 on cluster delete
+        # 4. Explicit Gmail Operator in kubeorbitOperator -> role='operator', CAN rollback, 403 on cluster delete
         ops_headers = {"X-Goog-Authenticated-User-Email": "accounts.google.com:gcp-ops@gmail.com"}
         r_ops_status = await async_client.get("/api/status", headers=ops_headers)
         assert r_ops_status.status_code == 200
         assert r_ops_status.json()["user"]["role"] == "operator"
 
-        r_ops_sec = await async_client.post(
-            "/api/clusters/obs-sbx/namespaces/default/secrets/my-sec/reveal", headers=ops_headers
+        r_ops_rb = await async_client.post(
+            "/api/clusters/obs-sbx/workloads/deployment/web/rollback?namespace=default",
+            json={"to_revision": 1},
+            headers=ops_headers,
         )
-        assert r_ops_sec.status_code == 200
+        assert r_ops_rb.status_code == 200
 
         r_ops_del = await async_client.delete("/api/admin/clusters/obs-sbx", headers=ops_headers)
         assert r_ops_del.status_code == 403
@@ -498,5 +524,37 @@ class TestGCPCustomIAMRolesAndStrictZeroTrust:
         r_adm_status = await async_client.get("/api/status", headers=adm_headers)
         assert r_adm_status.status_code == 200
         assert r_adm_status.json()["user"]["role"] == "admin"
+
+    def test_gcp_iam_policy_parser_supports_versioned_custom_role_suffix(self, monkeypatch: pytest.MonkeyPatch):
+        class _FakeResp:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "bindings": [
+                        {"role": "projects/demo-proj/roles/kubeorbitAdmin_v2", "members": ["user:Admin@Corp.com"]},
+                        {"role": "projects/demo-proj/roles/kubeorbitOperator_v2", "members": ["user:ops@corp.com"]},
+                        {"role": "projects/demo-proj/roles/kubeorbitViewer_v2", "members": ["domain:corp.com"]},
+                    ]
+                }
+
+        class _FakeSession:
+            def __init__(self, creds):
+                self.creds = creds
+
+            def post(self, url, json=None, timeout=8):
+                return _FakeResp()
+
+        import google.auth
+        import google.auth.transport.requests
+
+        monkeypatch.setattr(google.auth, "default", lambda scopes=None: (object(), "demo-proj"))
+        monkeypatch.setattr(google.auth.transport.requests, "AuthorizedSession", _FakeSession)
+
+        parsed = auth._fetch_gcp_iam_policy_from_api("demo-proj")
+        assert parsed["admin"] == ["user:admin@corp.com"]
+        assert parsed["operator"] == ["user:ops@corp.com"]
+        assert parsed["viewer"] == ["domain:corp.com"]
 
 

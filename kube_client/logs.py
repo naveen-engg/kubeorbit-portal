@@ -50,6 +50,16 @@ async def get_pod_logs(
     return stdout if stdout.strip() else (stderr or "No logs returned.")
 
 
+def is_secret_kind(kind: str) -> bool:
+    """Return True if *kind* targets Kubernetes Secret objects (including group/version-qualified forms)."""
+    normalized = (kind or "").strip().lower()
+    if not normalized:
+        return False
+    leaf = normalized.rsplit("/", 1)[-1]
+    base = leaf.split(".", 1)[0]
+    return base in {"secret", "secrets"}
+
+
 async def get_resource_yaml(
     context: str,
     kubeconfig_path: Path,
@@ -57,6 +67,8 @@ async def get_resource_yaml(
     kind: str,
     name: str,
 ) -> str:
+    if is_secret_kind(kind):
+        raise PermissionError("Kubernetes Secret value and YAML retrieval is disabled for security reasons.")
     cmd = [
         "kubectl", "--kubeconfig", str(kubeconfig_path), "--context", context,
         "get", kind, name, "-o", "yaml"

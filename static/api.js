@@ -64,6 +64,7 @@ export const api = {
   getTeams: () => apiFetch("/api/teams"),
 
   switchCluster: (clusterId) => apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/switch`, { method: "POST" }),
+  refreshClusterCache: (clusterId) => apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/refresh`, { method: "POST" }),
   getClusterInfo: (clusterId) => apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/info`),
   getNodes: (clusterId) => apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/nodes`),
 
@@ -75,12 +76,6 @@ export const api = {
 
   getNamespaceResources: (clusterId, namespace) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/namespaces/${encodeURIComponent(namespace)}/resources`),
-
-  revealSecret: (clusterId, namespace, name) =>
-    apiFetch(
-      `/api/clusters/${encodeURIComponent(clusterId)}/namespaces/${encodeURIComponent(namespace)}/secrets/${encodeURIComponent(name)}/reveal`,
-      { method: "POST" }
-    ),
 
   getNetworkTopology: (clusterId, namespace) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/topology/network${qs({ namespace })}`),
@@ -98,7 +93,27 @@ export const api = {
 
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/events${qs({ namespace, limit })}`),
 
-  getHelm: (clusterId) => apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/helm`),
+  getHelm: (clusterId, namespace) =>
+    apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/helm${qs({ namespace })}`),
+
+  getHelmReleaseDetails: (clusterId, namespace, releaseName, revision = null) =>
+    apiFetch(
+      `/api/clusters/${encodeURIComponent(clusterId)}/helm/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}${qs({ revision })}`
+    ),
+
+  getHelmReleaseHistory: (clusterId, namespace, releaseName, maxRevisions = 256) =>
+    apiFetch(
+      `/api/clusters/${encodeURIComponent(clusterId)}/helm/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/history${qs({ max_revisions: maxRevisions })}`
+    ),
+
+  diffHelmRevisions: (clusterId, namespace, releaseName, fromRevision, toRevision, mode = "values") =>
+    apiFetch(
+      `/api/clusters/${encodeURIComponent(clusterId)}/helm/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/diff${qs({
+        from_revision: fromRevision,
+        to_revision: toRevision,
+        mode,
+      })}`
+    ),
 
   getEcosystemOverview: (clusterId) => apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/ecosystem`),
 

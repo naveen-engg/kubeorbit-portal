@@ -34,7 +34,7 @@ from ._cache import TTLCache, cached
 from ._sdk import kubeconfig_path_for_cluster, read_current_context
 
 # -- kubectl invocation + cached SDK-first/CLI-fallback list helper ----------
-from ._fetch import cached_kubectl_list, invalidate_cluster_cache, kubectl_json
+from ._fetch import cached_kubectl_list, invalidate_cluster_cache, invalidate_cluster_data_cache, kubectl_json
 
 # -- per-resource-type fetchers ------------------------------------------------
 from .resources import (
@@ -58,7 +58,6 @@ from .resources import (
     get_services,
     get_statefulsets,
     get_storageclasses,
-    reveal_secret,
 )
 
 # -- aggregate / topology views ------------------------------------------------
@@ -71,7 +70,7 @@ from .topology import (
 )
 
 # -- logs / raw YAML -----------------------------------------------------------
-from .logs import get_pod_logs, get_resource_yaml
+from .logs import get_pod_logs, get_resource_yaml, is_secret_kind
 
 # -- audit trail ----------------------------------------------------------------
 from .audit import get_audit_logs, record_audit_event
@@ -94,6 +93,13 @@ from .workloads import (
 # -- root cause analysis ----------------------------------------------------------
 from .rca import diagnose_cluster_issues
 
+# -- helm release history, details & revision diff ------------------------------
+from .helm import (
+    diff_helm_release_revisions,
+    get_helm_release_details,
+    get_helm_release_history,
+)
+
 __all__ = [
     "BinaryNotFoundError",
     "CLIError",
@@ -105,6 +111,7 @@ __all__ = [
     "read_current_context",
     "cached_kubectl_list",
     "invalidate_cluster_cache",
+    "invalidate_cluster_data_cache",
     "kubectl_json",
     "get_configmaps",
     "get_cronjobs",
@@ -113,6 +120,9 @@ __all__ = [
     "get_events",
     "get_gateways",
     "get_helm_releases",
+    "get_helm_release_history",
+    "get_helm_release_details",
+    "diff_helm_release_revisions",
     "get_httproutes",
     "get_ingresses",
     "get_jobs",
@@ -126,7 +136,6 @@ __all__ = [
     "get_services",
     "get_statefulsets",
     "get_storageclasses",
-    "reveal_secret",
     "get_cluster_workload_map",
     "get_namespace_map",
     "get_network_topology",
@@ -134,6 +143,7 @@ __all__ = [
     "get_workloads_overview",
     "get_pod_logs",
     "get_resource_yaml",
+    "is_secret_kind",
     "get_audit_logs",
     "record_audit_event",
     "get_ecosystem_overview",

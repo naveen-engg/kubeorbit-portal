@@ -107,8 +107,8 @@ variable "initial_clusters_yaml" {
   type        = string
   default     = <<-EOT
     settings:
-      kube_cache_ttl_seconds: 15
-      auth_cache_ttl_seconds: 600
+      kube_cache_ttl_seconds: 30
+      auth_cache_ttl_seconds: 1800
       cluster_meta_cache_ttl_seconds: 120
       excluded_namespace_patterns:
         - kube-*
@@ -144,4 +144,10 @@ variable "max_instance_count" {
   description = "Maximum Cloud Run instances"
   type        = number
   default     = 5
+}
+
+variable "custom_role_id_suffix" {
+  description = "Optional suffix for custom IAM role IDs (e.g. '_v2') if previous role IDs are still in GCP's deletion hold."
+  type        = string
+  default     = ""
 }

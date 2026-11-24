@@ -4,8 +4,9 @@
 // cloud badge/label comes pre-resolved from the backend.
 
 import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
-import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261122-agui6";
-import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261122-agui6";
+import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261124-helm1";
+import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261124-helm1";
+import { createHelmViewsController } from "./helm.js?v=20261124-helm1";
 import {
   h,
   renderInto,
@@ -20,7 +21,6 @@ import {
   pill,
   statusPill,
   warningBanner,
-  revealButton,
   providerBadge,
 } from "./components.js";
 import { renderTopologyGraph, topologyLegend, hideNodeTooltip, NETWORK_COLUMNS, STORAGE_COLUMNS, NAMESPACE_MAP_COLUMNS } from "./topology.js";
@@ -64,6 +64,7 @@ const state = {
   aiChatMessages: [],
   userRole: "admin",
   userSubject: "anonymous",
+  readOnlyMode: true,
 };
 
 function canAdmin() {
@@ -71,7 +72,7 @@ function canAdmin() {
 }
 
 function canOperate() {
-  return state.userRole === "admin" || state.userRole === "operator";
+  return !state.readOnlyMode && (state.userRole === "admin" || state.userRole === "operator");
 }
 
 function applyRoleVisibility() {
@@ -112,6 +113,68 @@ function nextLoadToken(name) {
 }
 function isStaleToken(name, token) {
   return state.loadTokens[name] !== token;
+}
+
+// Client-side Stale-While-Revalidate (SWR) view cache:
+// - Within VIEW_CACHE_STALE_MS (10s): instant 0ms paint with zero network calls.
+// - Between 10s and VIEW_CACHE_TTL_MS (30s): instant paint + silent background refresh.
+// - Older than 30s or forced (manual refresh / auto-refresh tick): skeleton + network fetch.
+const VIEW_CACHE_TTL_MS = 30_000;
+const VIEW_CACHE_STALE_MS = 10_000;
+const SIDEBAR_COUNTS_TTL_MS = 60_000;
+const viewCache = new Map(); // cacheKey -> { data, ts }
+const sidebarCountsCache = { clusterId: null, ts: 0 };
+
+function clearViewCache() {
+  viewCache.clear();
+  sidebarCountsCache.clusterId = null;
+  sidebarCountsCache.ts = 0;
+}
+
+function recordNodesSidebarCount(clusterId, count) {
+  if (count == null || state.selectedClusterId !== clusterId) return;
+  setSidebarCount("count-nodes", count);
+  sidebarCountsCache.clusterId = clusterId;
+  sidebarCountsCache.ts = Date.now();
+}
+
+async function loadWithSWR({ key, tokenView, container, fetchFn, renderFn, force = false, showSkeleton = true, onError }) {
+  const token = nextLoadToken(tokenView);
+  const cached = !force ? viewCache.get(key) : null;
+  const age = cached ? Date.now() - cached.ts : Infinity;
+
+  if (cached && age < VIEW_CACHE_TTL_MS) {
+    renderFn(cached.data);
+    if (age < VIEW_CACHE_STALE_MS) return cached.data;
+    fetchFn()
+      .then((fresh) => {
+        viewCache.set(key, { data: fresh, ts: Date.now() });
+        if (isStaleToken(tokenView, token)) return;
+        renderFn(fresh);
+      })
+      .catch(() => { /* keep visible stale data on transient background error */ });
+    return cached.data;
+  }
+
+  if (showSkeleton && container) renderInto(container, loadingSkeleton());
+  try {
+    const data = await fetchFn();
+    viewCache.set(key, { data, ts: Date.now() });
+    if (isStaleToken(tokenView, token)) return null;
+    renderFn(data);
+    return data;
+  } catch (err) {
+    if (isStaleToken(tokenView, token)) return null;
+    if (onError) {
+      onError(err);
+    } else if (container) {
+      renderInto(
+        container,
+        errorState(err, () => loadWithSWR({ key, tokenView, container, fetchFn, renderFn, force: true, showSkeleton }))
+      );
+    }
+    return null;
+  }
 }
 
 // -- theme --------------------------------------------------------------
@@ -317,9 +380,13 @@ function setSelectorsDisabled(disabled) {
 // for a #cluster-select element this UI no longer has), which silently left
 // every namespace filter showing the *previous* cluster's namespaces after
 // clicking "Connect" on a different one.
-async function switchActiveCluster(clusterId) {
+async function switchActiveCluster(clusterId, opts = {}) {
   if (!clusterId) return;
-  if (clusterId !== state.selectedClusterId) resetAIChat(); // stale thread would otherwise answer for the wrong cluster
+  clearViewCache();
+  if (clusterId !== state.selectedClusterId) {
+    resetAIChat(); // stale thread would otherwise answer for the wrong cluster
+    helmController.resetHelmState();
+  }
   state.selectedClusterId = clusterId;
   saveSelection();
   setConnStatus("connecting");
@@ -331,21 +398,21 @@ async function switchActiveCluster(clusterId) {
     setConnStatus("ok");
     await populateNamespaceSelects(clusterId);
     renderAGUIQuickPrompts();
-    await loadActiveView();
-    loadClusterPanel(); // sync sidebar active state
+    if (!opts.skipViewLoad) await loadActiveView({ force: true });
+    if (!opts.skipClusterPanel) loadClusterPanel(); // sync sidebar active state
   } catch (err) {
     setConnStatus("error", err.message);
     const container = document.querySelector(`.view[data-view="${state.activeView}"] [id$="-content"]`);
-    if (container) renderInto(container, errorState(err, () => switchActiveCluster(clusterId)));
+    if (container) renderInto(container, errorState(err, () => switchActiveCluster(clusterId, opts)));
   } finally {
     setSelectorsDisabled(false);
   }
 }
 
-async function onClusterChange() {
+async function onClusterChange(opts = {}) {
   const clusterSelect = $("cluster-select");
   const clusterId = clusterSelect ? clusterSelect.value : state.selectedClusterId;
-  await switchActiveCluster(clusterId);
+  await switchActiveCluster(clusterId, opts);
 }
 
 // -- view: overview -----------------------------------------------------
@@ -499,205 +566,197 @@ function renderOverview(data) {
   renderInto($("overview-content"), h("div", {}, children));
 }
 
-async function loadHelmView() {
-  const container = $("helm-content");
-  if (!container) return;
-  const token = nextLoadToken("helm");
-  renderInto(container, loadingSkeleton());
-  try {
-    const helm = await api.getHelm(state.selectedClusterId);
-    if (isStaleToken("helm", token)) return;
-    const items = helm.items || [];
-    const deployedCount = items.filter((i) => (i.status || "").toLowerCase() === "deployed").length;
-    const nsCount = new Set(items.map((i) => i.namespace).filter(Boolean)).size;
-    renderInto(container, h("div", {}, [
-      statGrid([
-        statCard("Total Releases", items.length, null, STAT_ICONS.layers),
-        statCard("Deployed", deployedCount, null, STAT_ICONS.checkCircle),
-        statCard("Namespaces", nsCount, null, STAT_ICONS.folder),
-      ]),
-      panel(
-        "Helm Releases",
-        helm.available
-          ? dataTable(
-              [
-                { key: "name", label: "Release", mono: true },
-                { key: "namespace", label: "Namespace", mono: true },
-                { key: "chart", label: "Chart", mono: true },
-                { key: "app_version", label: "App Version" },
-                { key: "revision", label: "Revision" },
-                { key: "status", label: "Status" },
-              ],
-              items,
-              { emptyTitle: "No Helm releases found" }
-            )
-          : emptyState("Helm not available", "The `helm` CLI is not installed on the server running KubeOrbit.")
-      ),
-    ]));
-  } catch (err) {
-    if (isStaleToken("helm", token)) return;
-    renderInto(container, errorState(err, loadHelmView));
-  }
-}
+const helmController = createHelmViewsController({
+  getClusterId: () => state.selectedClusterId,
+  timeAgo,
+  openManifestModal: (kind, name, namespace) => openManifestModal(kind, name, namespace),
+  openPodInspectorModal: (podName, namespace) => openPodInspectorModal(podName, namespace),
+  openResourceMapForNamespace: (ns) => {
+    const typeEl = $("resourcemap-type-select");
+    const resEl = $("resourcemap-resource-select");
+    if (typeEl) typeEl.value = "";
+    if (resEl) resEl.value = "";
+    applyNamespaceFilterForView("resourcemap", ns || "default");
+    switchView("resourcemap");
+  },
+  switchView: (view) => switchView(view),
+  nextLoadToken,
+  isStaleToken,
+});
 
-async function loadEcosystemView() {
+async function loadEcosystemView(force = false) {
   const container = $("ecosystem-view-content");
   if (!container) return;
-  const token = nextLoadToken("ecosystem-view");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getEcosystemOverview(state.selectedClusterId);
-    if (isStaleToken("ecosystem-view", token)) return;
-    const all = data.integrations || [];
-    const detected = all.filter((i) => i.installed);
-    renderInto(container, h("div", {}, [
-      statGrid([
-        statCard("Categories Checked", data.total_checked || all.length, null, STAT_ICONS.grid),
-        statCard("Installed Integrations", detected.length, null, STAT_ICONS.checkCircle),
-      ]),
-      panel(
-        "Detected Platform & CNCF Integrations",
-        detected.length
-          ? h("div", { style: "padding:1rem;display:flex;flex-wrap:wrap;gap:10px;" }, detected.map((i) =>
-              h("span", {
-                style: "display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-size:0.85rem;font-weight:600;"
-              }, [i.category, h("span", { style: "opacity:0.75;font-weight:700;" }, `${i.total_count}`)])
-            ))
-          : emptyState("No ecosystem CRDs detected", `Checked ${data.total_checked || 11} categories (cert-manager, KEDA, Karpenter, Velero, External Secrets, Kyverno, CloudNativePG, Knative, Trivy, Argo CD, Flux).`),
-        null,
-        true
-      ),
-    ]));
-  } catch (err) {
-    if (isStaleToken("ecosystem-view", token)) return;
-    renderInto(container, errorState(err, loadEcosystemView));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `ecosystem:${clusterId}`,
+    tokenView: "ecosystem-view",
+    container,
+    force,
+    fetchFn: () => api.getEcosystemOverview(clusterId),
+    renderFn: (data) => {
+      const all = data.integrations || [];
+      const detected = all.filter((i) => i.installed);
+      renderInto(container, h("div", {}, [
+        statGrid([
+          statCard("Categories Checked", data.total_checked || all.length, null, STAT_ICONS.grid),
+          statCard("Installed Integrations", detected.length, null, STAT_ICONS.checkCircle),
+        ]),
+        panel(
+          "Detected Platform & CNCF Integrations",
+          detected.length
+            ? h("div", { style: "padding:1rem;display:flex;flex-wrap:wrap;gap:10px;" }, detected.map((i) =>
+                h("span", {
+                  style: "display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-size:0.85rem;font-weight:600;"
+                }, [i.category, h("span", { style: "opacity:0.75;font-weight:700;" }, `${i.total_count}`)])
+              ))
+            : emptyState("No ecosystem CRDs detected", `Checked ${data.total_checked || 11} categories (cert-manager, KEDA, Karpenter, Velero, External Secrets, Kyverno, CloudNativePG, Knative, Trivy, Argo CD, Flux).`),
+          null,
+          true
+        ),
+      ]));
+    },
+  });
 }
 
-async function loadCostView() {
+async function loadCostView(force = false) {
   const container = $("cost-view-content");
   if (!container) return;
-  const token = nextLoadToken("cost-view");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getCostEstimate(state.selectedClusterId);
-    if (isStaleToken("cost-view", token)) return;
-    const pools = data.pools || [];
-    const totalNodes = pools.reduce((s, p) => s + (p.node_count || 0), 0);
-    const monthlyFormatted = data.monthly_total_usd != null ? `$${data.monthly_total_usd.toFixed(2)}/mo` : "—";
-    renderInto(container, h("div", {}, [
-      statGrid([
-        statCard("Estimated Monthly Compute", monthlyFormatted, null, STAT_ICONS.pulse),
-        statCard("Node Pools", pools.length, null, STAT_ICONS.layers),
-        statCard("Total Nodes", totalNodes, null, STAT_ICONS.server),
-        statCard("Provider", (data.provider || "—").toUpperCase(), null, STAT_ICONS.cloud),
-      ]),
-      data.error && !data.monthly_total_usd ? warningBanner(data.error) : null,
-      panel(
-        "Node Pool Cost Breakdown",
-        dataTable(
-          [
-            { key: "name", label: "Pool Name", mono: true },
-            { label: "Machine Type", mono: true, render: (p) => p.machine_type || "—" },
-            { key: "node_count", label: "Nodes" },
-            { label: "Hourly Rate / Node", mono: true, render: (p) => (p.hourly_price_usd != null ? `$${p.hourly_price_usd.toFixed(4)}/hr` : "—") },
-            { label: "Estimated Monthly", mono: true, render: (p) => (p.priced && p.monthly_estimate_usd != null ? `$${p.monthly_estimate_usd.toFixed(2)}/mo` : p.note || "unpriced") },
-          ],
-          pools,
-          { emptyTitle: "No node pools reported for cost estimation" }
-        )
-      ),
-      data.disclaimer
-        ? h("div", { style: "margin-top:12px;padding:12px 16px;border-radius:12px;background:var(--bg-inset);border:1px solid var(--border);font-size:0.78rem;color:var(--fg-subtle);line-height:1.5;" }, data.disclaimer)
-        : null,
-    ].filter(Boolean)));
-  } catch (err) {
-    if (isStaleToken("cost-view", token)) return;
-    renderInto(container, errorState(err, loadCostView));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `cost:${clusterId}`,
+    tokenView: "cost-view",
+    container,
+    force,
+    fetchFn: () => api.getCostEstimate(clusterId),
+    renderFn: (data) => {
+      const pools = data.pools || [];
+      const totalNodes = pools.reduce((s, p) => s + (p.node_count || 0), 0);
+      const monthlyFormatted = data.monthly_total_usd != null ? `$${data.monthly_total_usd.toFixed(2)}/mo` : "—";
+      renderInto(container, h("div", {}, [
+        statGrid([
+          statCard("Estimated Monthly Compute", monthlyFormatted, null, STAT_ICONS.pulse),
+          statCard("Node Pools", pools.length, null, STAT_ICONS.layers),
+          statCard("Total Nodes", totalNodes, null, STAT_ICONS.server),
+          statCard("Provider", (data.provider || "—").toUpperCase(), null, STAT_ICONS.cloud),
+        ]),
+        data.error && !data.monthly_total_usd ? warningBanner(data.error) : null,
+        panel(
+          "Node Pool Cost Breakdown",
+          dataTable(
+            [
+              { key: "name", label: "Pool Name", mono: true },
+              { label: "Machine Type", mono: true, render: (p) => p.machine_type || "—" },
+              { key: "node_count", label: "Nodes" },
+              { label: "Hourly Rate / Node", mono: true, render: (p) => (p.hourly_price_usd != null ? `$${p.hourly_price_usd.toFixed(4)}/hr` : "—") },
+              { label: "Estimated Monthly", mono: true, render: (p) => (p.priced && p.monthly_estimate_usd != null ? `$${p.monthly_estimate_usd.toFixed(2)}/mo` : p.note || "unpriced") },
+            ],
+            pools,
+            { emptyTitle: "No node pools reported for cost estimation" }
+          )
+        ),
+        data.disclaimer
+          ? h("div", { style: "margin-top:12px;padding:12px 16px;border-radius:12px;background:var(--bg-inset);border:1px solid var(--border);font-size:0.78rem;color:var(--fg-subtle);line-height:1.5;" }, data.disclaimer)
+          : null,
+      ].filter(Boolean)));
+    },
+  });
 }
 
 // Cost estimation shells out to a cloud pricing API (slow on first call for
 // GKE especially -- see providers/pricing.py) -- loaded separately, after
 // the main overview, same as the ecosystem panel below.
-async function loadCostPanel() {
+async function loadCostPanel(force = false) {
   const target = $("cost-panel-content");
   if (!target) return;
-  const token = nextLoadToken("cost-panel");
-  try {
-    const data = await api.getCostEstimate(state.selectedClusterId);
-    if (isStaleToken("cost-panel", token)) return;
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `cost:${clusterId}`,
+    tokenView: "cost-panel",
+    container: target,
+    force,
+    showSkeleton: false,
+    fetchFn: () => api.getCostEstimate(clusterId),
+    renderFn: (data) => {
+      if (data.error && !data.monthly_total_usd) {
+        renderInto(target, h("div", { style: "font-size:0.85rem;color:var(--fg-subtle);" }, data.error));
+        return;
+      }
 
-    if (data.error && !data.monthly_total_usd) {
-      renderInto(target, h("div", { style: "font-size:0.85rem;color:var(--fg-subtle);" }, data.error));
-      return;
-    }
+      const rows = (data.pools || []).map((p) => h("div", {
+        style: "display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.82rem;"
+      }, [
+        h("span", {}, [
+          h("span", { style: "font-family:var(--font-mono);font-weight:600;color:var(--fg);" }, p.name),
+          h("span", { style: "color:var(--fg-subtle);margin-left:6px;" }, `${p.machine_type || "—"} × ${p.node_count}`),
+        ]),
+        p.priced
+          ? h("span", { style: "font-weight:700;color:var(--fg);" }, `$${p.monthly_estimate_usd?.toFixed(2)}/mo`)
+          : h("span", { style: "color:var(--fg-subtle);font-style:italic;", title: p.note || "" }, "unpriced"),
+      ]));
 
-    const rows = (data.pools || []).map((p) => h("div", {
-      style: "display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.82rem;"
-    }, [
-      h("span", {}, [
-        h("span", { style: "font-family:var(--font-mono);font-weight:600;color:var(--fg);" }, p.name),
-        h("span", { style: "color:var(--fg-subtle);margin-left:6px;" }, `${p.machine_type || "—"} × ${p.node_count}`),
-      ]),
-      p.priced
-        ? h("span", { style: "font-weight:700;color:var(--fg);" }, `$${p.monthly_estimate_usd?.toFixed(2)}/mo`)
-        : h("span", { style: "color:var(--fg-subtle);font-style:italic;", title: p.note || "" }, "unpriced"),
-    ]));
-
-    renderInto(target, h("div", { style: "display:flex;flex-direction:column;gap:10px;" }, [
-      h("div", { style: "font-size:1.6rem;font-weight:800;color:var(--fg);" },
-        data.monthly_total_usd != null ? `$${data.monthly_total_usd.toFixed(2)}/mo` : "—"),
-      h("div", { style: "display:flex;flex-direction:column;" }, rows),
-      h("div", { style: "font-size:0.72rem;color:var(--fg-subtle);font-style:italic;line-height:1.4;" }, data.disclaimer || ""),
-    ]));
-  } catch (err) {
-    if (isStaleToken("cost-panel", token)) return;
-    renderInto(target, h("div", { style: "font-size:0.82rem;color:var(--fg-subtle);" }, "Could not load cost estimate."));
-  }
+      renderInto(target, h("div", { style: "display:flex;flex-direction:column;gap:10px;" }, [
+        h("div", { style: "font-size:1.6rem;font-weight:800;color:var(--fg);" },
+          data.monthly_total_usd != null ? `$${data.monthly_total_usd.toFixed(2)}/mo` : "—"),
+        h("div", { style: "display:flex;flex-direction:column;" }, rows),
+        h("div", { style: "font-size:0.72rem;color:var(--fg-subtle);font-style:italic;line-height:1.4;" }, data.disclaimer || ""),
+      ]));
+    },
+    onError: () => {
+      renderInto(target, h("div", { style: "font-size:0.82rem;color:var(--fg-subtle);" }, "Could not load cost estimate."));
+    },
+  });
 }
 
 // Ecosystem CRD detection takes several seconds on first load (it probes ~18
 // resource types) -- loaded separately and after the main overview so it
 // never blocks the rest of the page from appearing.
-async function loadEcosystemPanel() {
+async function loadEcosystemPanel(force = false) {
   const target = $("ecosystem-panel-content");
   if (!target) return;
-  const token = nextLoadToken("ecosystem-panel");
-  try {
-    const data = await api.getEcosystemOverview(state.selectedClusterId);
-    if (isStaleToken("ecosystem-panel", token)) return;
-    const detected = (data.integrations || []).filter((i) => i.installed);
-    if (!detected.length) {
-      renderInto(target, h("div", { style: "font-size:0.85rem;color:var(--fg-subtle);" },
-        `No known ecosystem CRDs detected (checked ${data.total_checked} categories: cert-manager, KEDA, Karpenter, Velero, External Secrets, Kyverno, CloudNativePG, Knative, Trivy, Argo CD, Flux).`));
-      return;
-    }
-    renderInto(target, h("div", { style: "display:flex;flex-wrap:wrap;gap:8px;" }, detected.map((i) =>
-      h("span", {
-        style: "display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-size:0.8rem;font-weight:600;"
-      }, [i.category, h("span", { style: "opacity:0.75;font-weight:700;" }, `${i.total_count}`)])
-    )));
-  } catch (err) {
-    if (isStaleToken("ecosystem-panel", token)) return;
-    renderInto(target, h("div", { style: "font-size:0.82rem;color:var(--fg-subtle);" }, "Could not load ecosystem detection."));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `ecosystem:${clusterId}`,
+    tokenView: "ecosystem-panel",
+    container: target,
+    force,
+    showSkeleton: false,
+    fetchFn: () => api.getEcosystemOverview(clusterId),
+    renderFn: (data) => {
+      const detected = (data.integrations || []).filter((i) => i.installed);
+      if (!detected.length) {
+        renderInto(target, h("div", { style: "font-size:0.85rem;color:var(--fg-subtle);" },
+          `No known ecosystem CRDs detected (checked ${data.total_checked} categories: cert-manager, KEDA, Karpenter, Velero, External Secrets, Kyverno, CloudNativePG, Knative, Trivy, Argo CD, Flux).`));
+        return;
+      }
+      renderInto(target, h("div", { style: "display:flex;flex-wrap:wrap;gap:8px;" }, detected.map((i) =>
+        h("span", {
+          style: "display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-size:0.8rem;font-weight:600;"
+        }, [i.category, h("span", { style: "opacity:0.75;font-weight:700;" }, `${i.total_count}`)])
+      )));
+    },
+    onError: () => {
+      renderInto(target, h("div", { style: "font-size:0.82rem;color:var(--fg-subtle);" }, "Could not load ecosystem detection."));
+    },
+  });
 }
 
-async function loadOverview() {
+async function loadOverview(force = false) {
   const container = $("overview-content");
-  const token = nextLoadToken("overview");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getClusterInfo(state.selectedClusterId);
-    if (isStaleToken("overview", token)) return;
-    renderOverview(data);
-    loadCostPanel();
-    loadEcosystemPanel();
-  } catch (err) {
-    if (isStaleToken("overview", token)) return;
-    renderInto(container, errorState(err, loadOverview));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `overview:${clusterId}`,
+    tokenView: "overview",
+    container,
+    force,
+    fetchFn: () => api.getClusterInfo(clusterId),
+    renderFn: (data) => {
+      renderOverview(data);
+      recordNodesSidebarCount(clusterId, data.node_count ?? data.nodes?.length);
+      loadCostPanel(force);
+      loadEcosystemPanel(force);
+    },
+  });
 }
 
 // -- view: workloads ------------------------------------------------------
@@ -810,25 +869,24 @@ function renderWorkloads(data) {
   renderWorkloadIssues(data);
 }
 
-async function loadWorkloads() {
+async function loadWorkloads(force = false) {
   const statsContainer = $("workloads-stats");
-  const token = nextLoadToken("workloads");
-  renderInto(statsContainer, loadingSkeleton());
   renderInto($("workloads-issues"), h("div", {}));
   // Data is for a (possibly new) namespace -- collapse any open catalog
   // panel rather than leave it showing a stale, now-mismatched type list.
   catalogTypeFilter = null;
   const catalogPanel = $("workloads-catalog-panel");
   if (catalogPanel) catalogPanel.hidden = true;
-  try {
-    const namespace = $("workloads-namespace-select").value || undefined;
-    const data = await api.getWorkloads(state.selectedClusterId, namespace);
-    if (isStaleToken("workloads", token)) return;
-    renderWorkloads(data);
-  } catch (err) {
-    if (isStaleToken("workloads", token)) return;
-    renderInto(statsContainer, errorState(err, loadWorkloads));
-  }
+  const clusterId = state.selectedClusterId;
+  const namespace = $("workloads-namespace-select").value || undefined;
+  await loadWithSWR({
+    key: `workloads:${clusterId}:${namespace || "_all_"}`,
+    tokenView: "workloads",
+    container: statsContainer,
+    force,
+    fetchFn: () => api.getWorkloads(clusterId, namespace),
+    renderFn: (data) => renderWorkloads(data),
+  });
 }
 
 // -- view: namespace resources ----------------------------------------
@@ -1067,15 +1125,15 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
             { label: "Age", render: (r) => timeAgo(r.created_at) },
             {
               label: "Actions",
-              render: (r) =>
-                h("div", { style: "display:flex;gap:6px;align-items:center;" }, [
-                  canOperate() ? revealButton(() => openSecretModal(r, clusterId, namespace)) : null,
-                  h("button", {
-                    class: "btn btn--secondary btn--sm",
-                    style: "padding:0.2rem 0.55rem;font-size:0.75rem;font-weight:600;",
-                    onclick: () => openManifestModal("Secret", r.name, namespace),
-                  }, "YAML"),
-                ].filter(Boolean)),
+              render: () =>
+                h(
+                  "span",
+                  {
+                    class: "pill pill--unknown",
+                    title: "Kubernetes Secret values and YAML are disabled for security reasons",
+                  },
+                  "Metadata only"
+                ),
             },
           ],
           data.secrets,
@@ -1218,66 +1276,25 @@ function renderNamespaceResources(data, { clusterId, namespace }) {
   renderInto($("namespace-content"), h("div", {}, [tabsRow, contentArea]));
 }
 
-async function loadNamespaces() {
+async function loadNamespaces(force = false) {
   const container = $("namespace-content");
   const namespace = $("namespace-select").value;
   if (!namespace) {
     renderInto(container, emptyState("No namespace selected", "Choose a namespace above."));
     return;
   }
-  const token = nextLoadToken("namespaces");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getNamespaceResources(state.selectedClusterId, namespace);
-    if (isStaleToken("namespaces", token)) return;
-    renderNamespaceResources(data, { clusterId: state.selectedClusterId, namespace });
-  } catch (err) {
-    if (isStaleToken("namespaces", token)) return;
-    renderInto(container, errorState(err, loadNamespaces));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `namespaces:${clusterId}:${namespace}`,
+    tokenView: "namespaces",
+    container,
+    force,
+    fetchFn: () => api.getNamespaceResources(clusterId, namespace),
+    renderFn: (data) => renderNamespaceResources(data, { clusterId, namespace }),
+  });
 }
-
-// -- secret reveal modal --------------------------------------------------
 
 let lastFocusedBeforeModal = null;
-
-function openSecretModal(secretMeta, clusterId, namespace) {
-  lastFocusedBeforeModal = document.activeElement;
-  $("secret-modal-title").textContent = secretMeta.name;
-  const body = $("secret-modal-body");
-  body.replaceChildren(
-    warningBanner("Revealing decodes this Secret's values in your browser. Only do this if you're authorized to view them -- this action is logged."),
-    h("div", { class: "kv-list", style: "margin:12px 0;" }, [
-      h("div", { class: "kv-row" }, [h("div", { class: "kv-row__key" }, "Type"), h("div", { class: "kv-row__value" }, secretMeta.type || "Opaque")]),
-      h("div", { class: "kv-row" }, [h("div", { class: "kv-row__key" }, "Keys"), h("div", { class: "kv-row__value" }, (secretMeta.keys || []).join(", ") || "—")]),
-    ]),
-    revealButton(async (evt) => {
-      const btn = evt.currentTarget;
-      btn.disabled = true;
-      try {
-        renderRevealedSecret(await api.revealSecret(clusterId, namespace, secretMeta.name));
-      } catch (err) {
-        body.appendChild(errorState(err));
-      } finally {
-        btn.disabled = false;
-      }
-    })
-  );
-  $("secret-modal").hidden = false;
-  $("secret-modal-close").focus();
-}
-
-function renderRevealedSecret(result) {
-  const body = $("secret-modal-body");
-  const entries = Object.entries(result.values || {});
-  const rows = entries.map(([k, v]) => h("div", { class: "kv-row" }, [h("div", { class: "kv-row__key" }, k), h("div", { class: "kv-row__value" }, v)]));
-  body.appendChild(h("div", { class: "kv-list", style: "margin-top:12px;" }, rows.length ? rows : [emptyState("No data", "This secret has no keys.")]));
-}
-
-function closeSecretModal() {
-  $("secret-modal").hidden = true;
-  if (lastFocusedBeforeModal) lastFocusedBeforeModal.focus();
-}
 
 // -- resource detail modal (topology node click) --------------------------
 
@@ -1328,90 +1345,93 @@ function closeResourceModal() {
 
 // -- view: topology -------------------------------------------------------
 
-async function loadNetworkTopology() {
+async function loadNetworkTopology(force = false) {
   const container = $("network-topology-content");
   const namespace = $("network-namespace-select").value;
   if (!namespace) {
     renderInto(container, emptyState("No namespace selected", "Choose a namespace above."));
     return;
   }
-  const token = nextLoadToken("network-topology");
-  renderInto(container, loadingSkeleton());
-  try {
-    const graph = await api.getNetworkTopology(state.selectedClusterId, namespace);
-    if (isStaleToken("network-topology", token)) return; // superseded by a newer request -- drop this result
-    const key = `${state.selectedClusterId}:${namespace}`;
-    const animate = state.lastTopologyKey.network !== key;
-    state.lastTopologyKey.network = key;
-    const wrap = h("div", {}, [
-      h("div", { class: "topology-toolbar" }, topologyLegend()),
-      !graph.gateway_api_available
-        ? warningBanner("Gateway API CRDs are not installed on this cluster -- showing Load Balancer / Service / Pod relationships only.")
-        : null,
-      h("div", { class: "topology-container" }, renderTopologyGraph(graph, NETWORK_COLUMNS, animate, openResourceModal)),
-    ]);
-    renderInto(container, wrap);
-  } catch (err) {
-    if (isStaleToken("network-topology", token)) return;
-    renderInto(container, errorState(err, loadNetworkTopology));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `network:${clusterId}:${namespace}`,
+    tokenView: "network-topology",
+    container,
+    force,
+    fetchFn: () => api.getNetworkTopology(clusterId, namespace),
+    renderFn: (graph) => {
+      const key = `${clusterId}:${namespace}`;
+      const animate = state.lastTopologyKey.network !== key;
+      state.lastTopologyKey.network = key;
+      const wrap = h("div", {}, [
+        h("div", { class: "topology-toolbar" }, topologyLegend()),
+        !graph.gateway_api_available
+          ? warningBanner("Gateway API CRDs are not installed on this cluster -- showing Load Balancer / Service / Pod relationships only.")
+          : null,
+        h("div", { class: "topology-container" }, renderTopologyGraph(graph, NETWORK_COLUMNS, animate, openResourceModal)),
+      ]);
+      renderInto(container, wrap);
+    },
+  });
 }
 
-async function loadStorageTopology() {
+async function loadStorageTopology(force = false) {
   const container = $("storage-topology-content");
   const namespace = $("storage-namespace-select").value;
   if (!namespace) {
     renderInto(container, emptyState("No namespace selected", "Choose a namespace above."));
     return;
   }
-  const token = nextLoadToken("storage-topology");
-  renderInto(container, loadingSkeleton());
-  try {
-    const graph = await api.getStorageTopology(state.selectedClusterId, namespace);
-    if (isStaleToken("storage-topology", token)) return;
-    const key = `${state.selectedClusterId}:${namespace}`;
-    const animate = state.lastTopologyKey.storage !== key;
-    state.lastTopologyKey.storage = key;
-    const wrap = h("div", {}, [
-      h("div", { class: "topology-toolbar" }, topologyLegend()),
-      h("div", { class: "topology-container" }, renderTopologyGraph(graph, STORAGE_COLUMNS, animate, openResourceModal)),
-    ]);
-    renderInto(container, wrap);
-  } catch (err) {
-    if (isStaleToken("storage-topology", token)) return;
-    renderInto(container, errorState(err, loadStorageTopology));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `storage:${clusterId}:${namespace}`,
+    tokenView: "storage-topology",
+    container,
+    force,
+    fetchFn: () => api.getStorageTopology(clusterId, namespace),
+    renderFn: (graph) => {
+      const key = `${clusterId}:${namespace}`;
+      const animate = state.lastTopologyKey.storage !== key;
+      state.lastTopologyKey.storage = key;
+      const wrap = h("div", {}, [
+        h("div", { class: "topology-toolbar" }, topologyLegend()),
+        h("div", { class: "topology-container" }, renderTopologyGraph(graph, STORAGE_COLUMNS, animate, openResourceModal)),
+      ]);
+      renderInto(container, wrap);
+    },
+  });
 }
 
-async function loadNamespaceMap() {
+async function loadNamespaceMap(force = false) {
   const container = $("map-content");
   const namespace = $("map-namespace-select").value;
   if (!namespace) {
     renderInto(container, emptyState("No namespace selected", "Choose a namespace above."));
     return;
   }
-  const token = nextLoadToken("map");
-  renderInto(container, loadingSkeleton());
-  try {
-    const graph = await api.getNamespaceMap(state.selectedClusterId, namespace);
-    if (isStaleToken("map", token)) return;
-    const key = `${state.selectedClusterId}:${namespace}`;
-    const animate = state.lastTopologyKey.map !== key;
-    state.lastTopologyKey.map = key;
-    const banners = [];
-    if (!graph.ingress_available && !graph.gateway_api_available) {
-      banners.push(warningBanner("No Ingress resources or Gateway API CRDs found -- showing Service/Workload/Pod relationships only."));
-    }
-    const wrap = h("div", {}, [
-      h("div", { class: "topology-toolbar" }, topologyLegend()),
-      ...banners,
-      h("div", { class: "topology-container" }, renderTopologyGraph(graph, NAMESPACE_MAP_COLUMNS, animate, openResourceModal)),
-    ]);
-    renderInto(container, wrap);
-  } catch (err) {
-    if (isStaleToken("map", token)) return;
-    renderInto(container, errorState(err, loadNamespaceMap));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `nsmap:${clusterId}:${namespace}`,
+    tokenView: "map",
+    container,
+    force,
+    fetchFn: () => api.getNamespaceMap(clusterId, namespace),
+    renderFn: (graph) => {
+      const key = `${clusterId}:${namespace}`;
+      const animate = state.lastTopologyKey.map !== key;
+      state.lastTopologyKey.map = key;
+      const banners = [];
+      if (!graph.ingress_available && !graph.gateway_api_available) {
+        banners.push(warningBanner("No Ingress resources or Gateway API CRDs found -- showing Service/Workload/Pod relationships only."));
+      }
+      const wrap = h("div", {}, [
+        h("div", { class: "topology-toolbar" }, topologyLegend()),
+        ...banners,
+        h("div", { class: "topology-container" }, renderTopologyGraph(graph, NAMESPACE_MAP_COLUMNS, animate, openResourceModal)),
+      ]);
+      renderInto(container, wrap);
+    },
+  });
 }
 
 // -- view: events -----------------------------------------------------------
@@ -1510,19 +1530,18 @@ function renderEvents(data) {
   );
 }
 
-async function loadEvents() {
+async function loadEvents(force = false) {
   const container = $("events-content");
-  const token = nextLoadToken("events");
-  renderInto(container, loadingSkeleton());
-  try {
-    const namespace = $("events-namespace-select").value || undefined;
-    const data = await api.getEvents(state.selectedClusterId, namespace, 200);
-    if (isStaleToken("events", token)) return;
-    renderEvents(data);
-  } catch (err) {
-    if (isStaleToken("events", token)) return;
-    renderInto(container, errorState(err, loadEvents));
-  }
+  const clusterId = state.selectedClusterId;
+  const namespace = $("events-namespace-select").value || undefined;
+  await loadWithSWR({
+    key: `events:${clusterId}:${namespace || "_all_"}`,
+    tokenView: "events",
+    container,
+    force,
+    fetchFn: () => api.getEvents(clusterId, namespace, 200),
+    renderFn: (data) => renderEvents(data),
+  });
 }
 
 // -- Pods, Deployments & Logs / Manifest Modals -----------------------------
@@ -1565,6 +1584,11 @@ async function openManifestModal(kind, name, namespace) {
   $("manifest-modal-resource").textContent = `${kind}/${name}`;
   modal.hidden = false;
   const contentEl = $("manifest-modal-content");
+  const normalizedKind = String(kind || "").trim().toLowerCase().split("/").pop().split(".")[0];
+  if (normalizedKind === "secret" || normalizedKind === "secrets") {
+    contentEl.textContent = "# Kubernetes Secret value and YAML retrieval is disabled for security reasons.";
+    return;
+  }
   contentEl.textContent = "Loading manifest YAML...";
   try {
     const data = await api.getResourceYaml(state.selectedClusterId, namespace, kind, name);
@@ -1896,35 +1920,36 @@ function renderNodes(nodes = []) {
   ]));
 }
 
-async function loadNodesView() {
+async function loadNodesView(force = false) {
   const container = $("nodes-content");
-  const token = nextLoadToken("nodes");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getNodes(state.selectedClusterId);
-    if (isStaleToken("nodes", token)) return;
-    renderNodes(data.items || []);
-  } catch (err) {
-    if (isStaleToken("nodes", token)) return;
-    renderInto(container, errorState(err, loadNodesView));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `nodes:${clusterId}`,
+    tokenView: "nodes",
+    container,
+    force,
+    fetchFn: () => api.getNodes(clusterId),
+    renderFn: (data) => {
+      renderNodes(data.items || []);
+      recordNodesSidebarCount(clusterId, data.count ?? data.items?.length);
+    },
+  });
 }
 
 
 // -- view routing -----------------------------------------------------------
 
-async function loadClusterMap() {
+async function loadClusterMap(force = false) {
   const container = $("map-content");
-  const token = nextLoadToken("map");
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getClusterWorkloadMap(state.selectedClusterId);
-    if (isStaleToken("map", token)) return;
-    renderClusterMap(data);
-  } catch (err) {
-    if (isStaleToken("map", token)) return;
-    renderInto(container, errorState(err, loadClusterMap));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `cluster-map:${clusterId}`,
+    tokenView: "map",
+    container,
+    force,
+    fetchFn: () => api.getClusterWorkloadMap(clusterId),
+    renderFn: (data) => renderClusterMap(data),
+  });
 }
 
 // Shared tooltip for the Cluster Map's gauges/pod-distribution bar -- built
@@ -2345,19 +2370,18 @@ async function loadClustersView() {
 
 // -- view: logical applications -----------------------------------------------
 
-async function loadLogicalApplications() {
+async function loadLogicalApplications(force = false) {
   const container = $("applications-content");
-  const token = nextLoadToken("applications");
-  renderInto(container, loadingSkeleton());
-  try {
-    const ns = $("applications-namespace-select")?.value || undefined;
-    const data = await api.getLogicalApplications(state.selectedClusterId, ns);
-    if (isStaleToken("applications", token)) return;
-    renderLogicalApplications(data);
-  } catch (err) {
-    if (isStaleToken("applications", token)) return;
-    renderInto(container, errorState(err, loadLogicalApplications));
-  }
+  const clusterId = state.selectedClusterId;
+  const ns = $("applications-namespace-select")?.value || undefined;
+  await loadWithSWR({
+    key: `apps:${clusterId}:${ns || "_all_"}`,
+    tokenView: "applications",
+    container,
+    force,
+    fetchFn: () => api.getLogicalApplications(clusterId, ns),
+    renderFn: (data) => renderLogicalApplications(data),
+  });
 }
 
 function renderLogicalApplications(data) {
@@ -2506,19 +2530,18 @@ let selectedRcaKindFilter = "all"; // "all" | "active_failure" | "best_practice"
 let rcaSearchQuery = "";
 let _kmAnimTimer = null;
 
-async function loadDiagnosticsRCA() {
+async function loadDiagnosticsRCA(force = false) {
   const container = $("diagnostics-content");
-  const token = nextLoadToken("diagnostics");
+  const clusterId = state.selectedClusterId;
   const namespace = $("diagnostics-namespace-select")?.value || undefined;
-  renderInto(container, loadingSkeleton());
-  try {
-    const data = await api.getDiagnosticsRCA(state.selectedClusterId, namespace);
-    if (isStaleToken("diagnostics", token)) return;
-    renderDiagnosticsRCA(data);
-  } catch (err) {
-    if (isStaleToken("diagnostics", token)) return;
-    renderInto(container, errorState(err, loadDiagnosticsRCA));
-  }
+  await loadWithSWR({
+    key: `diagnostics:${clusterId}:${namespace || "_all_"}`,
+    tokenView: "diagnostics",
+    container,
+    force,
+    fetchFn: () => api.getDiagnosticsRCA(clusterId, namespace),
+    renderFn: (data) => renderDiagnosticsRCA(data),
+  });
 }
 
 function buildKubectlMachineInfographic(data) {
@@ -3326,21 +3349,23 @@ function renderDiagnosticsRCA(data) {
 
 // -- view: audit logs & timeline ----------------------------------------------
 
-async function loadAuditLogsView() {
+async function loadAuditLogsView(force = false) {
   const container = $("audit-content");
-  const token = nextLoadToken("audit");
-  renderInto(container, loadingSkeleton());
-  try {
-    const [eventsRes, auditRes] = await Promise.all([
-      api.getExtendedEvents(state.selectedClusterId),
-      api.getAuditLogs(state.selectedClusterId),
-    ]);
-    if (isStaleToken("audit", token)) return;
-    renderAuditAndEvents({ events: eventsRes.items || [], audit: auditRes.logs || [] });
-  } catch (err) {
-    if (isStaleToken("audit", token)) return;
-    renderInto(container, errorState(err, loadAuditLogsView));
-  }
+  const clusterId = state.selectedClusterId;
+  await loadWithSWR({
+    key: `audit:${clusterId}`,
+    tokenView: "audit",
+    container,
+    force,
+    fetchFn: async () => {
+      const [eventsRes, auditRes] = await Promise.all([
+        api.getExtendedEvents(clusterId),
+        api.getAuditLogs(clusterId),
+      ]);
+      return { events: eventsRes.items || [], audit: auditRes.logs || [] };
+    },
+    renderFn: (data) => renderAuditAndEvents(data),
+  });
 }
 
 function renderAuditAndEvents(data) {
@@ -4006,6 +4031,9 @@ function getAGUIToolCallbacks() {
     onOpenManifest: (kind, name, ns) => openManifestModal(kind, name, ns || "default"),
     onFilter12Step: (ns, step) =>
       executePortalUIAction({ action: "filter_12step", namespace: ns ?? "", step_number: step || null }),
+    onOpenHelmHistory: (ns, name) => helmController.navigateToHistory(ns || "default", name),
+    onOpenHelmDiff: (ns, name, fromRev, toRev, mode = "values") =>
+      helmController.navigateToDiff(ns || "default", name, fromRev, toRev, mode),
     onAskAI: (prompt) => {
       if (!prompt) return;
       openAIChatPanel();
@@ -4318,6 +4346,8 @@ function buildPortalQuickPrompts() {
 
   const viewPriorities = {
     helm: ["helm", "services", "workloads", "namespaces", "events", "diagnostics"],
+    "helm-history": ["helm", "workloads", "events", "services", "namespaces", "diagnostics"],
+    "helm-diff": ["helm", "workloads", "diagnostics", "services", "events", "namespaces"],
     network: ["services", "diagnostics", "namespaces", "workloads", "events", "helm"],
     diagnostics: ["diagnostics", "workloads", "services", "events", "helm", "namespaces"],
     workloads: ["workloads", "diagnostics", "services", "namespaces", "events", "helm"],
@@ -4800,29 +4830,31 @@ function getResourceMapController() {
   return resourceMapController;
 }
 
-async function loadResourceMap() {
-  const token = nextLoadToken("resourcemap");
+async function loadResourceMap(force = false) {
   const controller = getResourceMapController();
-  try {
-    const ns = $("resourcemap-namespace-select")?.value || "default";
-    const graph = await api.getNamespaceMap(state.selectedClusterId, ns);
-    if (isStaleToken("resourcemap", token)) return;
-    controller.setGraphData(graph);
-    const rootId = $("resourcemap-resource-select")?.value || "";
-    const depth = Number($("resourcemap-depth-select")?.value || 3);
-    // Only replay the entrance animation for genuinely new data -- a
-    // routine auto-refresh of the same namespace/root/depth would otherwise
-    // re-run the fade/scale-in cascade on every poll while the map is just
-    // sitting open, which reads as flicker rather than a fresh load.
-    const key = `${state.selectedClusterId}:${ns}:${rootId}:${depth}`;
-    const animate = state.lastTopologyKey.resourcemap !== key;
-    state.lastTopologyKey.resourcemap = key;
-    controller.filterAndRender(rootId, depth, animate);
-    controller.resetView();
-  } catch (err) {
-    if (isStaleToken("resourcemap", token)) return;
-    console.error("Resource Map load error:", err);
-  }
+  const clusterId = state.selectedClusterId;
+  const ns = $("resourcemap-namespace-select")?.value || "default";
+  await loadWithSWR({
+    key: `nsmap:${clusterId}:${ns}`,
+    tokenView: "resourcemap",
+    container: null,
+    force,
+    showSkeleton: false,
+    fetchFn: () => api.getNamespaceMap(clusterId, ns),
+    renderFn: (graph) => {
+      controller.setGraphData(graph);
+      const rootId = $("resourcemap-resource-select")?.value || "";
+      const depth = Number($("resourcemap-depth-select")?.value || 3);
+      const key = `${clusterId}:${ns}:${rootId}:${depth}`;
+      const animate = state.lastTopologyKey.resourcemap !== key;
+      state.lastTopologyKey.resourcemap = key;
+      controller.filterAndRender(rootId, depth, animate);
+      controller.resetView();
+    },
+    onError: (err) => {
+      console.error("Resource Map load error:", err);
+    },
+  });
 }
 
 const viewLoaders = {
@@ -4839,18 +4871,21 @@ const viewLoaders = {
   network: loadNetworkTopology,
   storage: loadStorageTopology,
   events: loadEvents,
-  helm: loadHelmView,
+  helm: (force) => helmController.loadHelmView(force),
+  "helm-history": (force) => helmController.loadHelmHistoryView(force),
+  "helm-diff": (force) => helmController.loadHelmDiffView(force),
   ecosystem: loadEcosystemView,
   cost: loadCostView,
 };
 
 
-async function loadActiveView() {
+async function loadActiveView(opts = {}) {
   const loader = viewLoaders[state.activeView];
   if (!loader || !state.selectedClusterId) return;
-  await loader();
+  const force = Boolean(opts && opts.force);
+  await loader(force);
   updateLastUpdated();
-  loadSidebarCounts(); // fire-and-forget -- never blocks the view that was actually requested
+  loadSidebarCounts(force); // fire-and-forget -- throttled to once per 60s unless forced
 }
 
 // Live resource counts next to Nodes/Namespaces/Pods/Workload Catalog in the
@@ -4864,16 +4899,20 @@ function setSidebarCount(id, value) {
   if (el) el.textContent = value == null ? "" : String(value);
 }
 
-async function loadSidebarCounts() {
+async function loadSidebarCounts(force = false) {
   if (!state.selectedClusterId) return;
   const clusterId = state.selectedClusterId;
+  if (
+    !force &&
+    sidebarCountsCache.clusterId === clusterId &&
+    Date.now() - sidebarCountsCache.ts < SIDEBAR_COUNTS_TTL_MS
+  ) {
+    return;
+  }
   try {
-    // Used to also fetch getWorkloads() here for a Pods sidebar badge --
-    // Pods no longer has its own nav item (folded into Overview's stat
-    // cards, same as the other workload types), so that fetch is gone too.
     const nodes = await api.getNodes(clusterId);
     if (state.selectedClusterId !== clusterId) return; // cluster changed mid-flight
-    setSidebarCount("count-nodes", nodes.count ?? nodes.items?.length);
+    recordNodesSidebarCount(clusterId, nodes.count ?? nodes.items?.length);
   } catch (_) {
     // Sidebar counts are a nice-to-have, not worth surfacing an error banner for.
   }
@@ -4959,7 +4998,7 @@ function startAutoRefresh() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
   if (!state.refreshIntervalSec) return;
   state.refreshTimer = setInterval(() => {
-    if (document.visibilityState === "visible" && state.selectedClusterId) loadActiveView();
+    if (document.visibilityState === "visible" && state.selectedClusterId) loadActiveView({ force: true });
   }, state.refreshIntervalSec * 1000);
 }
 
@@ -4987,7 +5026,20 @@ function wireStaticControls() {
     localStorage.setItem("kubeorbit_refresh_interval", String(state.refreshIntervalSec));
     startAutoRefresh();
   });
-  $("refresh-now").addEventListener("click", () => loadActiveView());
+  $("refresh-now").addEventListener("click", async () => {
+    const btn = $("refresh-now");
+    if (btn) btn.disabled = true;
+    try {
+      if (state.selectedClusterId) {
+        await api.refreshClusterCache(state.selectedClusterId).catch(() => {});
+      }
+      clearViewCache();
+      helmController.resetHelmState();
+      await loadActiveView({ force: true });
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
 
   // Sidebar navigation click handler
   const sidebarNav = $("sidebar-nav");
@@ -5034,7 +5086,6 @@ function wireStaticControls() {
     renderAGUIQuickPrompts();
     if (state.activeView === "diagnostics") loadDiagnosticsRCA();
   });
-  $("diagnostics-reanalyze-btn")?.addEventListener("click", () => state.activeView === "diagnostics" && loadDiagnosticsRCA());
   $("audit-type-select")?.addEventListener("change", () => state.activeView === "audit" && loadAuditLogsView());
 
   $("namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "namespaces") loadNamespaces(); });
@@ -5048,11 +5099,6 @@ function wireStaticControls() {
   $("storage-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "storage") loadStorageTopology(); });
   $("events-namespace-select")?.addEventListener("change", () => { renderAGUIQuickPrompts(); if (state.activeView === "events") loadEvents(); });
 
-  $("secret-modal-close")?.addEventListener("click", closeSecretModal);
-  $("secret-modal-cancel")?.addEventListener("click", closeSecretModal);
-  $("secret-modal")?.addEventListener("click", (e) => {
-    if (e.target.id === "secret-modal") closeSecretModal();
-  });
   $("resource-modal-close")?.addEventListener("click", closeResourceModal);
   $("resource-modal-cancel")?.addEventListener("click", closeResourceModal);
   $("resource-modal")?.addEventListener("click", (e) => {
@@ -5082,7 +5128,6 @@ function wireStaticControls() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    if (!$("secret-modal").hidden) closeSecretModal();
     if (!$("resource-modal").hidden) closeResourceModal();
     if (!$("onboard-modal").hidden) $("onboard-modal").hidden = true;
     if (!$("logs-modal").hidden) closeLogsModal();
@@ -5090,11 +5135,13 @@ function wireStaticControls() {
     if (!$("rollout-modal").hidden) closeRolloutModal();
     if (!$("pod-inspector-modal").hidden) closePodInspectorModal();
     if (!$("ai-diagnose-modal").hidden) closeAIDiagnoseModal();
+    if ($("helm-details-modal") && !$("helm-details-modal").hidden) helmController.closeDetailsModal();
   });
 
   initOnboardModal();
   initClustersModal();
   initAIChatPanel();
+  helmController.wireHelmStaticControls();
 
   // Wire sidebar "Add" button (same modal as header button)
   $("onboard-trigger-sidebar")?.addEventListener("click", () => {
@@ -5735,6 +5782,7 @@ async function bootstrap() {
   }
   state.userRole = status.user?.role || "admin";
   state.userSubject = status.user?.subject || "anonymous";
+  state.readOnlyMode = status.read_only_mode !== false;
   applyRoleVisibility();
   const roleSuffix = status.user?.role ? ` (${status.user.role})` : "";
   $("auth-mode-text").textContent = `auth: ${status.auth_mode}${roleSuffix}`;
@@ -5760,7 +5808,7 @@ async function bootstrap() {
 
   populateTeamSelect();
   const clusterId = restoreSelectionOrDefault();
-  if (clusterId) await onClusterChange();
+  if (clusterId) await onClusterChange({ skipViewLoad: true, skipClusterPanel: true });
   switchView(state.activeView || "overview");
   startAutoRefresh();
   loadClusterPanel(); // populate sidebar cluster connections panel

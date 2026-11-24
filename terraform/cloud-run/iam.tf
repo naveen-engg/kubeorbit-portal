@@ -49,7 +49,7 @@ resource "google_project_iam_member" "runner_iam_reviewer" {
 # --------------------------------------------------------------------------- #
 resource "google_project_iam_custom_role" "kubeorbit_admin" {
   project     = var.project_id
-  role_id     = "kubeorbitAdmin"
+  role_id     = "kubeorbitAdmin${var.custom_role_id_suffix}"
   title       = "KubeOrbit Portal Administrator"
   description = "Full KubeOrbit administrative access: cluster onboarding/editing/deletion, secret reveal, workload rollback, and read-only views."
   permissions = ["resourcemanager.projects.get"]
@@ -58,7 +58,7 @@ resource "google_project_iam_custom_role" "kubeorbit_admin" {
 
 resource "google_project_iam_custom_role" "kubeorbit_operator" {
   project     = var.project_id
-  role_id     = "kubeorbitOperator"
+  role_id     = "kubeorbitOperator${var.custom_role_id_suffix}"
   title       = "KubeOrbit Portal Operator"
   description = "KubeOrbit SRE/Operator access: workload rollback, secret reveal, AI diagnostics, and read-only views (no cluster CRUD)."
   permissions = ["resourcemanager.projects.get"]
@@ -67,7 +67,7 @@ resource "google_project_iam_custom_role" "kubeorbit_operator" {
 
 resource "google_project_iam_custom_role" "kubeorbit_viewer" {
   project     = var.project_id
-  role_id     = "kubeorbitViewer"
+  role_id     = "kubeorbitViewer${var.custom_role_id_suffix}"
   title       = "KubeOrbit Portal Viewer"
   description = "KubeOrbit read-only access: view cluster topology, pods, logs, YAML, cost, and AI diagnostics."
   permissions = ["resourcemanager.projects.get"]

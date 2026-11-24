@@ -101,6 +101,8 @@ _PORTAL_VIEWS = frozenset(
         "storage",
         "events",
         "helm",
+        "helm-history",
+        "helm-diff",
         "ecosystem",
         "cost",
     }
@@ -149,7 +151,7 @@ def ui_navigate_portal(view: str, namespace: str = "") -> dict:
     """Navigate the KubeOrbit portal UI to a specific view and optional namespace filter.
 
     Args:
-        view: Target portal view name (e.g. overview, workloads, diagnostics, events, helm, map, cost).
+        view: Target portal view name (e.g. overview, workloads, diagnostics, events, helm, helm-history, helm-diff, map, cost).
         namespace: Optional Kubernetes namespace filter to apply in the UI (empty for all namespaces).
     """
     normalized = (view or "").strip().lower()
@@ -235,10 +237,20 @@ def ui_open_manifest(kind: str, name: str, namespace: str = "default") -> dict:
         name: Kubernetes object name.
         namespace: Kubernetes namespace (defaults to 'default').
     """
+    from kube_client.logs import is_secret_kind
+
     res_kind = (kind or "").strip()
     res_name = (name or "").strip()
     if not res_kind or not res_name:
         return {"ok": False, "error": "Both kind and name are required."}
+    if is_secret_kind(res_kind):
+        return {
+            "ok": False,
+            "error": (
+                "Kubernetes Secret value and YAML retrieval is disabled for security reasons. "
+                "Only Secret metadata (name, type, key names) is available."
+            ),
+        }
     return {
         "__ag_ui_kind__": "ui_action",
         "ok": True,
@@ -268,6 +280,17 @@ def ui_propose_rollback(
         reason: Concise evidence-based reason why rollback is recommended.
         to_revision: Optional rollout revision number (0 rolls back to previous revision).
     """
+    from config import get_runtime_env
+
+    if get_runtime_env().read_only_mode:
+        return {
+            "ok": False,
+            "error": (
+                "KubeOrbit is running in strictly read-only mode (KUBEORBIT_READ_ONLY=true). "
+                "Provide rollback guidance as text/kubectl commands instead of staging write actions."
+            ),
+        }
+
     ns = (namespace or "").strip()
     wtype_raw = (workload_type or "").strip().lower()
     wtype = _ROLLBACK_TYPE_MAP.get(wtype_raw)

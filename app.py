@@ -34,6 +34,7 @@ load_dotenv()  # .env is optional (e.g. Docker sets real env vars instead) -- se
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi import Path as ApiPath
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -58,6 +59,17 @@ K8S_KIND_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,127}$"
 
 app = FastAPI(title="KubeOrbit", version=APP_VERSION)
 
+class SSEAwareGZipMiddleware(GZipMiddleware):
+    """Compress JSON/JS/CSS/HTML payloads without buffering AG-UI SSE streams."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and (scope.get("path") or "").endswith("/ai/ag-ui"):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(SSEAwareGZipMiddleware, minimum_size=1024, compresslevel=6)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_runtime_env().cors_allow_origins,
@@ -231,6 +243,7 @@ async def status(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any
     return {
         "version": APP_VERSION,
         "auth_mode": env.auth_mode,
+        "read_only_mode": env.read_only_mode,
         "user": {"subject": user.subject, "method": user.method, "role": user.role},
         "disable_local_provider": env.disable_local_provider,
         "providers": providers_list,
@@ -556,15 +569,31 @@ async def switch_cluster(ctx: ClusterContext = Depends(get_cluster_context)) -> 
     }
 
 
+@app.post("/api/clusters/{cluster_id}/refresh")
+async def refresh_cluster_cache(ctx: ClusterContext = Depends(get_cluster_context)) -> Dict[str, Any]:
+    """Invalidate server-side cached Kubernetes/Helm/metadata reads for one cluster
+    so an explicit UI refresh fetches fresh live data immediately."""
+    kube_client.invalidate_cluster_data_cache(ctx.context, ctx.cluster.id)
+    return {"status": "ok", "cluster_id": ctx.cluster.id}
+
+
 @app.get("/api/clusters/{cluster_id}/info")
 async def cluster_info(ctx: ClusterContext = Depends(get_cluster_context)) -> Dict[str, Any]:
     meta_ttl = get_config_store().settings.cluster_meta_cache_ttl_seconds
-    meta: ClusterMeta = await kube_client.cached(
-        f"provider-meta:{ctx.cluster.id}", meta_ttl, ctx.provider.get_cluster_metadata
+
+    async def _fetch_nodes_safe():
+        try:
+            return await kube_client.get_nodes(ctx.context, ctx.kubeconfig), None
+        except kube_client.CLIError as exc:
+            return [], str(exc)
+
+    meta, (nodes, node_fetch_error), helm = await asyncio.gather(
+        kube_client.cached(f"provider-meta:{ctx.cluster.id}", meta_ttl, ctx.provider.get_cluster_metadata),
+        _fetch_nodes_safe(),
+        kube_client.get_helm_releases(ctx.context, ctx.kubeconfig, include_resources=False),
     )
 
-    try:
-        nodes = await kube_client.get_nodes(ctx.context, ctx.kubeconfig)
+    if nodes:
         counts: Dict[str, int] = {}
         for n in nodes:
             pool = n.get("node_pool") or "unassigned"
@@ -572,12 +601,6 @@ async def cluster_info(ctx: ClusterContext = Depends(get_cluster_context)) -> Di
         for pool in meta.node_pools:
             if pool.name in counts:
                 pool.node_count = counts[pool.name]
-        node_fetch_error = None
-    except kube_client.CLIError as exc:
-        nodes = []
-        node_fetch_error = str(exc)
-
-    helm = await kube_client.get_helm_releases(ctx.context, ctx.kubeconfig)
 
     return {
         "badge": ctx.badge(),
@@ -665,34 +688,6 @@ async def namespace_resources(
     }
 
 
-@app.post("/api/clusters/{cluster_id}/namespaces/{namespace}/secrets/{name}/reveal")
-async def reveal_secret(
-    namespace: str = NamespaceSegment,
-    name: str = ResourceNameSegment,
-    ctx: ClusterContext = Depends(get_cluster_context),
-    user: CurrentUser = Depends(get_current_user),
-) -> JSONResponse:
-    """Explicit, audited, uncached decode of one secret's values. Never
-    invoked implicitly by any list/overview endpoint."""
-    require_role(user, "operator", team_id=ctx.cluster.team_id)
-    logger.warning(
-        "SECRET REVEAL: user=%s cluster=%s namespace=%s secret=%s",
-        user.subject, ctx.cluster.id, namespace, name,
-    )
-    result = await kube_client.reveal_secret(ctx.context, ctx.kubeconfig, namespace, name)
-    kube_client.record_audit_event(
-        user=user.subject,
-        action="REVEAL_SECRET",
-        cluster_id=ctx.cluster.id,
-        namespace=namespace,
-        resource=f"secret/{name}",
-        details=f"Revealed secret '{name}' in namespace '{namespace}'",
-    )
-    response = JSONResponse(content=_json(result))
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
 # --------------------------------------------------------------------------- #
 # Topology
 # --------------------------------------------------------------------------- #
@@ -746,10 +741,93 @@ async def cluster_events(
     return {"cluster_id": ctx.cluster.id, "namespace": namespace, "items": events, "count": len(events)}
 
 
+def _translate_helm_cli_error(exc: kube_client.CLIError, namespace: str, release_name: str) -> None:
+    msg = str(exc).lower()
+    if "not found" in msg:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Helm release '{release_name}' not found in namespace '{namespace}'.",
+        ) from exc
+    if "invalid" in msg:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise exc
+
+
 @app.get("/api/clusters/{cluster_id}/helm")
-async def cluster_helm(ctx: ClusterContext = Depends(get_cluster_context)) -> Dict[str, Any]:
-    helm = await kube_client.get_helm_releases(ctx.context, ctx.kubeconfig)
+async def cluster_helm(
+    namespace: Optional[str] = OptionalNamespaceQuery,
+    ctx: ClusterContext = Depends(get_cluster_context),
+) -> Dict[str, Any]:
+    helm = await kube_client.get_helm_releases(ctx.context, ctx.kubeconfig, namespace=namespace)
     return {"cluster_id": ctx.cluster.id, **helm}
+
+
+@app.get("/api/clusters/{cluster_id}/helm/{namespace}/{release_name}/history")
+async def cluster_helm_history(
+    namespace: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    release_name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    max_revisions: int = Query(256, ge=1, le=256),
+    ctx: ClusterContext = Depends(get_cluster_context),
+) -> Dict[str, Any]:
+    try:
+        data = await kube_client.get_helm_release_history(
+            ctx.context, ctx.kubeconfig, namespace, release_name, max_revisions=max_revisions
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except kube_client.CLIError as exc:
+        _translate_helm_cli_error(exc, namespace, release_name)
+    return {"cluster_id": ctx.cluster.id, **data}
+
+
+@app.get("/api/clusters/{cluster_id}/helm/{namespace}/{release_name}/diff")
+async def cluster_helm_diff(
+    namespace: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    release_name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    from_revision: int = Query(..., ge=1),
+    to_revision: int = Query(..., ge=1),
+    mode: str = Query("values", pattern=r"^(values|all_values|manifest)$"),
+    ctx: ClusterContext = Depends(get_cluster_context),
+) -> JSONResponse:
+    try:
+        data = await kube_client.diff_helm_release_revisions(
+            ctx.context,
+            ctx.kubeconfig,
+            namespace,
+            release_name,
+            from_revision=from_revision,
+            to_revision=to_revision,
+            compare_mode=mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except kube_client.CLIError as exc:
+        _translate_helm_cli_error(exc, namespace, release_name)
+    return JSONResponse(
+        content={"cluster_id": ctx.cluster.id, **data},
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/clusters/{cluster_id}/helm/{namespace}/{release_name}")
+async def cluster_helm_details(
+    namespace: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    release_name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    revision: Optional[int] = Query(None, ge=1),
+    ctx: ClusterContext = Depends(get_cluster_context),
+) -> JSONResponse:
+    try:
+        data = await kube_client.get_helm_release_details(
+            ctx.context, ctx.kubeconfig, namespace, release_name, revision=revision
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except kube_client.CLIError as exc:
+        _translate_helm_cli_error(exc, namespace, release_name)
+    return JSONResponse(
+        content={"cluster_id": ctx.cluster.id, **data},
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.get("/api/clusters/{cluster_id}/namespaces/{namespace}/pods/{pod_name}/logs")
@@ -780,6 +858,11 @@ async def resource_yaml(
     namespace: Optional[str] = OptionalNamespaceQuery,
     ctx: ClusterContext = Depends(get_cluster_context),
 ) -> Dict[str, Any]:
+    if kube_client.is_secret_kind(kind):
+        raise HTTPException(
+            status_code=403,
+            detail="Kubernetes Secret value and YAML retrieval is disabled for security reasons.",
+        )
     yaml_content = await kube_client.get_resource_yaml(
         ctx.context, ctx.kubeconfig, namespace, kind, name
     )
@@ -947,6 +1030,14 @@ async def workload_rollback(
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Execute rollback for a workload and record an audit log."""
+    if get_runtime_env().read_only_mode:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "KubeOrbit is running in strictly read-only mode (KUBEORBIT_READ_ONLY=true). "
+                "Cluster write operations are disabled."
+            ),
+        )
     require_role(user, "operator", team_id=ctx.cluster.team_id)
     res = await kube_client.rollout_undo(
         ctx.context, ctx.kubeconfig, namespace, workload_type, name, to_revision=req.to_revision
@@ -1158,18 +1249,18 @@ async def ai_ag_ui(
 # --------------------------------------------------------------------------- #
 
 class NoCacheStaticFiles(StaticFiles):
-    """Force browsers to revalidate every request instead of trusting their
-    own cache heuristics for how long an unlabeled static file stays fresh --
-    without this, editing styles.css/app.js can leave a user staring at a
-    stale cached copy with no visible sign anything is wrong. `no-cache`
-    (not `no-store`) still lets the browser use a cached body once the
-    server confirms via ETag/Last-Modified that it hasn't changed."""
+    """Serve versioned (`?v=...`) non-HTML static assets with browser caching
+    while forcing revalidation (`no-cache`, allowing 304 Not Modified via ETag)
+    for index.html and unversioned assets so deploys never serve stale code."""
 
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+        qs = scope.get("query_string", b"") or b""
+        is_html = path == "" or path.endswith(".html")
+        if b"v=" in qs and not is_html:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
 

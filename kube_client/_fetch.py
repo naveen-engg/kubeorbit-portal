@@ -40,17 +40,26 @@ async def cached_kubectl_list(
     ns_key = namespace or "_all_"
     kcfg_key = kubeconfig_path.stem if kubeconfig_path else "default"
     cache_key = f"{context}:{kcfg_key}:{resource}:{ns_key}:{','.join(extra_args or [])}"
+    missing_key = f"{context}:crd_missing:{resource}"
 
     async def factory():
-        # 1. Fast-path: Try in-process Python Kubernetes client library (with 10s timeout)
+        if optional and await _cache.get(missing_key):
+            return {"items": [], "available": False}
+
+        # 1. Fast-path: Try in-process Python Kubernetes client library (with 15s timeout)
         if not extra_args:
             try:
                 items, is_handled = await asyncio.wait_for(
                     asyncio.to_thread(_sync_sdk_list, context, kubeconfig_path, resource, namespace),
-                    timeout=10.0,
+                    timeout=15.0,
                 )
                 if is_handled and items is not None:
                     return {"items": items, "available": True}
+            except ResourceTypeUnavailableError:
+                if optional:
+                    await _cache.set(missing_key, 300, True)
+                    return {"items": [], "available": False}
+                raise
             except asyncio.TimeoutError:
                 pass
 
@@ -63,12 +72,20 @@ async def cached_kubectl_list(
             data = await kubectl_json(context, kubeconfig_path, args)
         except ResourceTypeUnavailableError:
             if optional:
+                await _cache.set(missing_key, 300, True)
                 return {"items": [], "available": False}
             raise
         return {"items": (data or {}).get("items", []), "available": True}
 
     result, _ = await _cache.get_or_set(cache_key, ttl, factory)
     return result["items"], result["available"]
+
+
+def invalidate_cluster_data_cache(context: str, cluster_id: Optional[str] = None) -> None:
+    """Clear cached Kubernetes/Helm/provider data for a cluster while keeping its warm SDK client pool."""
+    _cache.invalidate_prefix(f"{context}:")
+    if cluster_id:
+        _cache.invalidate_prefix(f"provider-meta:{cluster_id}")
 
 
 def invalidate_cluster_cache(context: str) -> None:

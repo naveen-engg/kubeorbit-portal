@@ -115,7 +115,7 @@ class TestAGUIProtocolModelsAndTools:
 
     def test_mcp_tool_catalog_read_only_and_complete(self):
         catalog = get_mcp_tool_catalog()
-        assert len(catalog) == len(_TOOL_FUNCTIONS) == 24
+        assert len(catalog) == len(_TOOL_FUNCTIONS) == 27
         for entry in catalog:
             assert entry["read_only"] is True
             assert entry["destructive"] is False
@@ -123,7 +123,7 @@ class TestAGUIProtocolModelsAndTools:
             assert entry["description"]
             assert isinstance(entry["parameters"], list)
 
-    def test_interactive_portal_ui_tools_validation_and_shapes(self):
+    def test_interactive_portal_ui_tools_validation_and_shapes(self, monkeypatch: pytest.MonkeyPatch):
         nav_ok = ai_agent.ui_navigate_portal("Diagnostics", namespace="helm-demo")
         assert nav_ok == {
             "__ag_ui_kind__": "ui_action",
@@ -152,6 +152,13 @@ class TestAGUIProtocolModelsAndTools:
         yaml_ok = ai_agent.ui_open_manifest("Deployment", "hello-storefront", "helm-demo")
         assert yaml_ok["action"] == "open_manifest"
         assert ai_agent.ui_open_manifest("", "x")["ok"] is False
+
+        # Default strictly read-only mode blocks HITL rollback proposals
+        assert ai_agent.ui_propose_rollback("helm-demo", "Deployments", "hello-storefront", "Read-only check")["ok"] is False
+
+        # Opt-in write mode allows HITL rollback proposal staging
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
 
         hitl_ok = ai_agent.ui_propose_rollback("helm-demo", "Deployments", "hello-storefront", "CrashLoopBackOff on rev 2", to_revision=1)
         assert hitl_ok == {
@@ -211,6 +218,8 @@ class TestAGUIStreamingRuntime:
             "ensure_vertex_ai_env",
             lambda: {"configured": True, "backend": "vertex_ai", "project": "p", "location": "global", "model": "gemini-3.5-flash"},
         )
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
 
         async def fake_session(sid, user_id="anonymous"):
             return _FakeSession(sid or "th-dedup", user_id=user_id), True
@@ -243,6 +252,8 @@ class TestAGUIStreamingRuntime:
 
     @pytest.mark.asyncio
     async def test_stream_ag_ui_run_emits_mcp_ui_action_and_hitl_events(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
         monkeypatch.setattr(
             ai_agent,
             "ensure_vertex_ai_env",
@@ -355,7 +366,7 @@ class TestAGUIHTTPEndpointsAndRBAC:
         data = r_status.json()
         assert data["protocols"]["ag_ui"]["version"] == "1.0"
         assert data["protocols"]["ag_ui"]["transport"] == "sse"
-        assert data["protocols"]["mcp"]["tool_count"] == 24
+        assert data["protocols"]["mcp"]["tool_count"] == 27
         assert data["protocols"]["mcp"]["read_only"] is True
         assert data["protocols"]["adk"]["framework"] == "google-adk"
 
@@ -364,8 +375,8 @@ class TestAGUIHTTPEndpointsAndRBAC:
         tools_payload = r_tools.json()
         assert tools_payload["protocol"] == "mcp"
         assert tools_payload["read_only"] is True
-        assert tools_payload["count"] == 24
-        assert len(tools_payload["tools"]) == 24
+        assert tools_payload["count"] == 27
+        assert len(tools_payload["tools"]) == 27
         assert len(tools_payload["ag_ui_frontend_tools"]) == 6
 
     @pytest.mark.asyncio
@@ -413,6 +424,8 @@ class TestAGUIHTTPEndpointsAndRBAC:
             "ensure_vertex_ai_env",
             lambda: {"configured": True, "backend": "vertex_ai", "project": "p", "location": "global", "model": "gemini-3.5-flash"},
         )
+        monkeypatch.setenv("KUBEORBIT_READ_ONLY", "false")
+        config.get_runtime_env.cache_clear()
 
         async def fake_session(sid, user_id="anonymous"):
             return _FakeSession(sid or "th-http", user_id=user_id), True
@@ -506,3 +519,16 @@ class TestAGUIHTTPEndpointsAndRBAC:
         assert "renderInteractiveToolBody" in app_js
         assert "summarizeToolResult" in app_js
         assert "agui_views.js" in index_html
+
+    def test_ui_open_manifest_blocks_secrets_and_allows_configmaps(self):
+        import ai_agent
+
+        for secret_kind in ("Secret", "secret", "secrets", "secrets.v1", "v1/Secret"):
+            blocked = ai_agent.ui_open_manifest(secret_kind, "app-credentials", "default")
+            assert blocked["ok"] is False
+            assert "disabled" in blocked["error"].lower()
+
+        allowed = ai_agent.ui_open_manifest("ConfigMap", "app-config", "default")
+        assert allowed["ok"] is True
+        assert allowed["action"] == "open_manifest"
+        assert allowed["kind"] == "ConfigMap"

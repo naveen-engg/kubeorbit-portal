@@ -159,9 +159,50 @@ async def get_extended_events(cluster_id: str, namespace: Optional[str] = None, 
     )
 
 
-async def get_helm_releases(cluster_id: str) -> dict:
-    """List installed Helm releases on the cluster."""
-    return await get_client().get(f"/api/clusters/{cluster_id}/helm")
+async def get_helm_releases(cluster_id: str, namespace: Optional[str] = None) -> dict:
+    """List installed Helm releases on the cluster with revision and rendered resource health."""
+    return await get_client().get(f"/api/clusters/{cluster_id}/helm", {"namespace": namespace})
+
+
+async def get_helm_release_details(
+    cluster_id: str,
+    namespace: str,
+    release_name: str,
+    revision: Optional[int] = None,
+) -> dict:
+    """Get masked user/computed values, manifest YAML, notes, and resource status for a Helm release."""
+    return await get_client().get(
+        f"/api/clusters/{cluster_id}/helm/{namespace}/{release_name}",
+        {"revision": revision},
+    )
+
+
+async def get_helm_release_history(
+    cluster_id: str,
+    namespace: str,
+    release_name: str,
+    max_revisions: int = 256,
+) -> dict:
+    """List full revision history (status, chart, app version, description) for a Helm release."""
+    return await get_client().get(
+        f"/api/clusters/{cluster_id}/helm/{namespace}/{release_name}/history",
+        {"max_revisions": max_revisions},
+    )
+
+
+async def diff_helm_revisions(
+    cluster_id: str,
+    namespace: str,
+    release_name: str,
+    from_revision: int,
+    to_revision: int,
+    mode: str = "values",
+) -> dict:
+    """Diff two revisions of a Helm release across values, all_values, or manifest (secrets masked server-side)."""
+    return await get_client().get(
+        f"/api/clusters/{cluster_id}/helm/{namespace}/{release_name}/diff",
+        {"from_revision": from_revision, "to_revision": to_revision, "mode": mode},
+    )
 
 
 async def get_cost_estimate(cluster_id: str) -> dict:

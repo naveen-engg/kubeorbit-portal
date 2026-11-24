@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config_store
 
-from ._cache import _kubectl_semaphore
+from ._cache import _cache, _kubectl_semaphore
 from ._cli import run_cli
-from ._fetch import cached_kubectl_list, kubectl_json
+from ._fetch import cached_kubectl_list
 from .normalize import _normalize_pod
 from .resources import (
     get_configmaps,
@@ -37,7 +37,7 @@ async def get_workloads_overview(
     context: str, kubeconfig_path: Path, namespace: Optional[str]
 ) -> Dict[str, Any]:
     pods, deployments, statefulsets, daemonsets, jobs, cronjobs = await asyncio.gather(
-        get_pods(context, kubeconfig_path, namespace),
+        get_pods(context, kubeconfig_path, namespace, include_metrics=False),
         get_deployments(context, kubeconfig_path, namespace),
         get_statefulsets(context, kubeconfig_path, namespace),
         get_daemonsets(context, kubeconfig_path, namespace),
@@ -88,7 +88,7 @@ async def get_network_topology(context: str, kubeconfig_path: Path, namespace: s
         get_services(context, kubeconfig_path, namespace),
         get_gateways(context, kubeconfig_path, namespace),
         get_httproutes(context, kubeconfig_path, namespace),
-        get_pods(context, kubeconfig_path, namespace),
+        get_pods(context, kubeconfig_path, namespace, include_metrics=False),
         cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl),
     )
 
@@ -176,10 +176,12 @@ async def get_network_topology(context: str, kubeconfig_path: Path, namespace: s
 
 async def get_storage_topology(context: str, kubeconfig_path: Path, namespace: str) -> Dict[str, Any]:
     """StorageClass -> PV -> PVC -> Pod graph."""
-    storageclasses, pvs, pvcs = await asyncio.gather(
+    ttl = get_config_store().settings.kube_cache_ttl_seconds
+    storageclasses, pvs, pvcs, (raw_pods, _) = await asyncio.gather(
         get_storageclasses(context, kubeconfig_path),
         get_pvs(context, kubeconfig_path),
         get_pvcs(context, kubeconfig_path, namespace),
+        cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl),
     )
 
     nodes: List[Dict[str, Any]] = []
@@ -209,11 +211,6 @@ async def get_storage_topology(context: str, kubeconfig_path: Path, namespace: s
                 add_node(pv_id, pv["name"], "pv", "healthy" if pv["status"] == "Bound" else "pending", pv)
             edges.append({"source": pv_id, "target": pvc_id})
 
-    # Normalized pods don't carry volume info, so pull raw pod specs once
-    # (namespace-scoped, cached) to find PVC -> pod linkage.
-    raw_pods, _ = await cached_kubectl_list(
-        context, kubeconfig_path, "pods", namespace, get_config_store().settings.kube_cache_ttl_seconds
-    )
     for raw_pod in raw_pods:
         pod_name = raw_pod["metadata"]["name"]
         pod_status = raw_pod.get("status", {}).get("phase", "Unknown")
@@ -258,6 +255,7 @@ async def get_namespace_map(context: str, kubeconfig_path: Path, namespace: str)
     (
         ingresses, gateways, httproutes, services, deployments, statefulsets,
         daemonsets, jobs, cronjobs, configmaps, secrets, serviceaccounts, pvcs,
+        (raw_pods, _), (raw_replicasets, _),
     ) = await asyncio.gather(
         get_ingresses(context, kubeconfig_path, namespace),
         get_gateways(context, kubeconfig_path, namespace),
@@ -272,9 +270,9 @@ async def get_namespace_map(context: str, kubeconfig_path: Path, namespace: str)
         get_secrets_metadata(context, kubeconfig_path, namespace),
         get_serviceaccounts(context, kubeconfig_path, namespace),
         get_pvcs(context, kubeconfig_path, namespace),
+        cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl),
+        cached_kubectl_list(context, kubeconfig_path, "replicasets", namespace, ttl),
     )
-    raw_pods, _ = await cached_kubectl_list(context, kubeconfig_path, "pods", namespace, ttl)
-    raw_replicasets, _ = await cached_kubectl_list(context, kubeconfig_path, "replicasets", namespace, ttl)
 
     rs_owner: Dict[str, Tuple[str, str]] = {}
     for rs in raw_replicasets:
@@ -537,30 +535,36 @@ async def get_cluster_workload_map(
     context: str,
     kubeconfig_path: Path,
 ) -> Dict[str, Any]:
-    nodes_raw = await kubectl_json(context, kubeconfig_path, ["get", "nodes"])
-    pods_raw = await kubectl_json(context, kubeconfig_path, ["get", "pods", "--all-namespaces"])
+    settings = get_config_store().settings
+    ttl = settings.kube_cache_ttl_seconds
+    meta_ttl = settings.cluster_meta_cache_ttl_seconds
 
-    top_nodes_map = {}
-    try:
-        cmd = ["kubectl", "--kubeconfig", str(kubeconfig_path), "--context", context, "top", "nodes", "--no-headers"]
-        async with _kubectl_semaphore:
-            rc, stdout, _ = await run_cli(cmd, check=False)
-        if rc == 0 and stdout:
-            for line in stdout.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 5:
-                    node_n, cpu_str, cpu_p, mem_str, mem_p = parts[0], parts[1], parts[2], parts[3], parts[4]
-                    top_nodes_map[node_n] = {
-                        "cpu_str": cpu_str,
-                        "cpu_pct": int(cpu_p.replace("%", "")) if "%" in cpu_p else 0,
-                        "mem_str": mem_str,
-                        "mem_pct": int(mem_p.replace("%", "")) if "%" in mem_p else 0,
-                    }
-    except Exception:
-        pass
+    async def _fetch_top_nodes() -> Dict[str, Dict[str, Any]]:
+        metrics: Dict[str, Dict[str, Any]] = {}
+        try:
+            cmd = ["kubectl", "--kubeconfig", str(kubeconfig_path), "--context", context, "top", "nodes", "--no-headers"]
+            async with _kubectl_semaphore:
+                rc, stdout, _ = await run_cli(cmd, check=False)
+            if rc == 0 and stdout:
+                for line in stdout.strip().splitlines():
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        node_n, cpu_str, cpu_p, mem_str, mem_p = parts[0], parts[1], parts[2], parts[3], parts[4]
+                        metrics[node_n] = {
+                            "cpu_str": cpu_str,
+                            "cpu_pct": int(cpu_p.replace("%", "")) if "%" in cpu_p else 0,
+                            "mem_str": mem_str,
+                            "mem_pct": int(mem_p.replace("%", "")) if "%" in mem_p else 0,
+                        }
+        except Exception:
+            return {}
+        return metrics
 
-    node_items = (nodes_raw or {}).get("items", [])
-    raw_pods = (pods_raw or {}).get("items", [])
+    (node_items, _), (raw_pods, _), (top_nodes_map, _) = await asyncio.gather(
+        cached_kubectl_list(context, kubeconfig_path, "nodes", None, meta_ttl),
+        cached_kubectl_list(context, kubeconfig_path, "pods", None, ttl),
+        _cache.get_or_set(f"{context}:top:nodes", ttl, _fetch_top_nodes),
+    )
 
     # Exclude kube-system namespace from cluster map view
     pod_items = [

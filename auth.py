@@ -15,8 +15,7 @@ confused:
 
    3-Tier RBAC Hierarchy:
      - "viewer":   Read-only access to clusters, workloads, topologies, events, logs, and YAML.
-     - "operator": All viewer permissions + Secret Reveal (`POST /secrets/{name}/reveal`)
-                   and Workload Rollback (`POST /workloads/{type}/{name}/rollback`).
+     - "operator": All viewer permissions + Workload Rollback (`POST /workloads/{type}/{name}/rollback`).
      - "admin":    All operator permissions + Cluster Onboarding, Editing, and Deletion
                    (`/api/admin/clusters*`).
 
@@ -27,6 +26,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -53,6 +53,8 @@ GCP_CUSTOM_ROLE_SUFFIX_MAP = {
     "/roles/kubeorbitoperator": "operator",
     "/roles/kubeorbitviewer": "viewer",
 }
+
+_GCP_CUSTOM_ROLE_RE = re.compile(r"/roles/kubeorbit(admin|operator|viewer)(?:_[a-z0-9]+)?$")
 
 
 def invalidate_gcp_iam_cache() -> None:
@@ -87,9 +89,17 @@ def _fetch_gcp_iam_policy_from_api(project_id: str) -> Dict[str, List[str]]:
         for binding in policy.get("bindings", []):
             role_name = (binding.get("role") or "").strip().lower()
             members = [m.strip().lower() for m in (binding.get("members") or []) if m]
-            for suffix, tier in GCP_CUSTOM_ROLE_SUFFIX_MAP.items():
+            tier = None
+            for suffix, mapped_tier in GCP_CUSTOM_ROLE_SUFFIX_MAP.items():
                 if role_name.endswith(suffix):
-                    out[tier].extend(members)
+                    tier = mapped_tier
+                    break
+            if tier is None:
+                m = _GCP_CUSTOM_ROLE_RE.search(role_name)
+                if m:
+                    tier = m.group(1)
+            if tier:
+                out[tier].extend(members)
     except Exception as exc:
         logger.warning("Could not fetch GCP IAM policy for project '%s': %s", project_id, exc)
     return out

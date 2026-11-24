@@ -248,7 +248,3 @@ export function fillSelect(selectEl, items, { valueKey, labelKey, placeholder, s
 export function warningBanner(text) {
   return h("div", { class: "warning-banner" }, [icon("warning"), h("div", {}, text)]);
 }
-
-export function revealButton(onClick) {
-  return h("button", { class: "btn btn--danger", onClick }, [icon("eye"), " Reveal"]);
-}

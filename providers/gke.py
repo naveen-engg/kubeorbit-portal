@@ -19,11 +19,12 @@ Expected config.* keys (see config/clusters.example.yaml):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from kube_client import CLIError, kubeconfig_path_for_cluster, read_current_context, run_cli
 from providers.base import (
@@ -43,6 +44,48 @@ from providers.base import (
 from providers.pricing import fetch_gcp_compute_hourly_price
 
 logger = logging.getLogger("kubeorbit.providers.gke")
+
+_CACHED_GCLOUD_ACCOUNT: Optional[str] = None
+_GCLOUD_ACCOUNT_CHECKED: bool = False
+
+
+async def _resolve_gcp_identity() -> Optional[str]:
+    global _CACHED_GCLOUD_ACCOUNT, _GCLOUD_ACCOUNT_CHECKED
+    if _GCLOUD_ACCOUNT_CHECKED:
+        return _CACHED_GCLOUD_ACCOUNT
+
+    account: Optional[str] = None
+    try:
+        import google.auth
+        import google.auth.transport.requests
+
+        def _adc_email() -> Optional[str]:
+            creds, _ = google.auth.default()
+            email = getattr(creds, "service_account_email", None)
+            if email == "default":
+                try:
+                    creds.refresh(google.auth.transport.requests.Request())
+                    email = getattr(creds, "service_account_email", None)
+                except Exception:
+                    email = None
+            return str(email) if email and email != "default" else None
+
+        account = await asyncio.to_thread(_adc_email)
+    except Exception:
+        account = None
+
+    if not account:
+        try:
+            _, stdout, _ = await run_cli(["gcloud", "config", "get-value", "account"], check=False)
+            val = (stdout or "").strip()
+            if val and not val.lower().startswith("(unset"):
+                account = val
+        except CLIError:
+            account = None
+
+    _CACHED_GCLOUD_ACCOUNT = account
+    _GCLOUD_ACCOUNT_CHECKED = True
+    return account
 
 
 @register_provider("gke")
@@ -98,13 +141,7 @@ class GKEProvider(BaseKubeProvider):
         )
 
     async def _current_identity(self, impersonate: str | None) -> ProviderIdentity:
-        try:
-            _, stdout, _ = await run_cli(
-                ["gcloud", "config", "get-value", "account", "--format=value"], check=False
-            )
-            account = stdout.strip() or None
-        except CLIError:
-            account = None
+        account = await _resolve_gcp_identity()
         return ProviderIdentity(
             provider="gke",
             account=account,

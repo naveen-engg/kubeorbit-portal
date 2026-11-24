@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from ._cache import _cache
 from ._fetch import cached_kubectl_list
+from ._sdk import _sync_sdk_list_crd_names
 
 # (plural.group resource name for `kubectl get`, display label, category)
 KNOWN_CRDS = [
@@ -50,7 +52,16 @@ async def get_ecosystem_overview(context: str, kubeconfig: Path) -> Dict[str, An
     """Check every known CRD in KNOWN_CRDS and report which are installed,
     grouped by the tool/project that owns them."""
 
+    async def _fetch_crd_names() -> Optional[set[str]]:
+        return await asyncio.to_thread(_sync_sdk_list_crd_names, context, kubeconfig)
+
+    crd_names, _ = await _cache.get_or_set(
+        f"{context}:crd_names", _ECOSYSTEM_CACHE_TTL_SECONDS, _fetch_crd_names
+    )
+
     async def check(resource: str, label: str, category: str) -> Dict[str, Any]:
+        if crd_names is not None and resource not in crd_names:
+            return {"resource": resource, "kind": label, "category": category, "installed": False, "count": 0}
         items, available = await cached_kubectl_list(
             context, kubeconfig, resource, None, _ECOSYSTEM_CACHE_TTL_SECONDS, optional=True
         )

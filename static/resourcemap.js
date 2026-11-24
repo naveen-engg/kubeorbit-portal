@@ -950,15 +950,17 @@ export class ResourceMapController {
     ]);
 
     // Action buttons
-    const actions = h("div", { style: "display:flex;gap:8px;margin-top:auto;padding-top:1rem;border-top:1px solid var(--border);" }, [
-      h("button", {
-        type: "button",
-        className: "btn btn--secondary btn--sm",
-        style: "flex:1;",
-        onclick: () => {
-          if (this.onNodeAction) this.onNodeAction("yaml", node);
-        }
-      }, "View YAML"),
+    const actions = h("div", { style: "display:flex;gap:8px;margin-top:auto;padding-top:1rem;border-top:1px solid var(--border);align-items:center;" }, [
+      kindKey === "secret"
+        ? h("span", { style: "font-size:0.78rem;color:var(--fg-muted);font-weight:600;" }, "Secret values masked (metadata only)")
+        : h("button", {
+            type: "button",
+            className: "btn btn--secondary btn--sm",
+            style: "flex:1;",
+            onclick: () => {
+              if (this.onNodeAction) this.onNodeAction("yaml", node);
+            }
+          }, "View YAML"),
       kindKey === "pod" ? h("button", {
         type: "button",
         className: "btn btn--primary btn--sm",

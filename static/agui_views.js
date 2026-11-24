@@ -113,6 +113,18 @@ export function summarizeToolResult(toolName, argsObj, resultObj, fallbackStatus
       const items = Array.isArray(resultObj.items) ? resultObj.items : [];
       return `${items.length} release${items.length === 1 ? "" : "s"}`;
     }
+    case "get_helm_release_history": {
+      const items = Array.isArray(resultObj.items) ? resultObj.items : [];
+      return `${items.length} revision${items.length === 1 ? "" : "s"}`;
+    }
+    case "get_helm_release_details": {
+      const rev = resultObj.revision;
+      return rev != null ? `rev ${rev} · ${resultObj.status || "details"}` : "release details";
+    }
+    case "diff_helm_revisions": {
+      if (resultObj.has_changes === false) return "no changes";
+      return `+${resultObj.added_lines ?? 0} / -${resultObj.removed_lines ?? 0}`;
+    }
     case "get_events":
     case "get_extended_events": {
       const items = Array.isArray(resultObj.items) ? resultObj.items : [];
@@ -411,7 +423,9 @@ function renderNamespaceResourcesView(argsObj, data, uiState, rerender, cb) {
             h("div", { className: "agui-iv-row__sub" }, sub),
           ]),
           h("div", { className: "agui-iv-actions" }, [
-            miniBtn("YAML", () => cb.onOpenManifest?.(kind, item.name, ns)),
+            activeTab.id === "secrets"
+              ? badge("Metadata only", "info")
+              : miniBtn("YAML", () => cb.onOpenManifest?.(kind, item.name, ns)),
           ]),
         ]);
       })
@@ -540,6 +554,32 @@ function renderHelmReleasesView(argsObj, data, uiState, rerender, cb) {
                 ),
               ]),
               h("div", { className: "agui-iv-actions" }, [
+                miniBtn(
+                  "History",
+                  () => {
+                    uiState.activeAction = "helm-history";
+                    cb.onOpenHelmHistory?.(rel.namespace || "default", rel.name);
+                    rerender();
+                  },
+                  activeView === "helm-history" ? "primary" : "default"
+                ),
+                Number(rel.revision) > 1
+                  ? miniBtn(
+                      "Diff",
+                      () => {
+                        uiState.activeAction = "helm-diff";
+                        cb.onOpenHelmDiff?.(
+                          rel.namespace || "default",
+                          rel.name,
+                          Number(rel.revision) - 1,
+                          Number(rel.revision),
+                          "values"
+                        );
+                        rerender();
+                      },
+                      activeView === "helm-diff" ? "primary" : "default"
+                    )
+                  : null,
                 rel.namespace
                   ? miniBtn(
                       "Namespace",
@@ -568,6 +608,122 @@ function renderHelmReleasesView(argsObj, data, uiState, rerender, cb) {
           )
         )
       : h("div", { className: "agui-iv-empty" }, "No Helm releases found in this cluster."),
+  ]);
+}
+
+function renderHelmHistoryCardView(argsObj, data, uiState, rerender, cb) {
+  const items = asArray(data?.items);
+  const ns = data?.namespace || argsObj?.namespace || "default";
+  const relName = data?.release || argsObj?.release_name || "";
+  const activeView = cb.getActiveView?.() || uiState.activeAction || "";
+  const currentRev = data?.current_revision ?? items[0]?.revision;
+  return h("div", { className: "agui-iv" }, [
+    h("div", { className: "agui-iv-header" }, [
+      h("span", { className: "agui-iv-title" }, `Helm History · ${ns}/${relName} (${items.length})`),
+      h("div", { className: "agui-iv-actions" }, [
+        relName
+          ? miniBtn(
+              "Open History View",
+              () => {
+                uiState.activeAction = "helm-history";
+                cb.onOpenHelmHistory?.(ns, relName);
+                rerender();
+              },
+              activeView === "helm-history" ? "primary" : "default"
+            )
+          : null,
+      ].filter(Boolean)),
+    ]),
+    items.length
+      ? h(
+          "div",
+          { className: "agui-iv-list" },
+          items.slice(0, 12).map((rev, idx) => {
+            const prevRev = idx < items.length - 1 ? items[idx + 1]?.revision : null;
+            return h("div", { className: "agui-iv-row" }, [
+              h("div", { className: "agui-iv-row__main" }, [
+                h("div", { className: "agui-iv-row__title" }, [
+                  badge(rev.status || "unknown", statusTone(rev.status || "")),
+                  h("span", { className: "agui-iv-mono" }, `Rev ${rev.revision}`),
+                  rev.is_current || rev.revision === currentRev ? badge("current", "ok") : null,
+                ].filter(Boolean)),
+                h("div", { className: "agui-iv-row__sub" }, [rev.chart, rev.description].filter(Boolean).join(" · ")),
+              ]),
+              h("div", { className: "agui-iv-actions" }, [
+                prevRev != null && relName
+                  ? miniBtn("vs previous", () => cb.onOpenHelmDiff?.(ns, relName, prevRev, rev.revision, "values"), "default")
+                  : null,
+                !(rev.is_current || rev.revision === currentRev) && currentRev != null && relName
+                  ? miniBtn("vs current", () => cb.onOpenHelmDiff?.(ns, relName, rev.revision, currentRev, "values"), "default")
+                  : null,
+              ].filter(Boolean)),
+            ]);
+          })
+        )
+      : h("div", { className: "agui-iv-empty" }, "No Helm revisions recorded."),
+  ]);
+}
+
+function renderHelmDiffCardView(argsObj, data, uiState, rerender, cb) {
+  const ns = data?.namespace || argsObj?.namespace || "default";
+  const relName = data?.release || argsObj?.release_name || "";
+  const fromRev = data?.from_revision ?? argsObj?.from_revision;
+  const toRev = data?.to_revision ?? argsObj?.to_revision;
+  const mode = data?.compare_mode || argsObj?.mode || "values";
+  const blocks = asArray(data?.blocks);
+  const previewLines = [];
+  for (const blk of blocks) {
+    if (blk.type === "hunk" && Array.isArray(blk.lines)) {
+      for (const ln of blk.lines) {
+        if (ln.kind === "add" || ln.kind === "remove") {
+          const pfx = ln.kind === "add" ? "+ " : "- ";
+          previewLines.push(`${pfx}${ln.text || ""}`);
+          if (previewLines.length >= 12) break;
+        }
+      }
+    }
+    if (previewLines.length >= 12) break;
+  }
+
+  return h("div", { className: "agui-iv" }, [
+    h("div", { className: "agui-iv-header" }, [
+      h("span", { className: "agui-iv-title" }, `Helm Diff · ${ns}/${relName} (Rev ${fromRev} → ${toRev})`),
+      h("div", { className: "agui-iv-actions" }, [
+        relName && fromRev && toRev
+          ? miniBtn("Open Diff Viewer", () => cb.onOpenHelmDiff?.(ns, relName, fromRev, toRev, mode), "primary")
+          : null,
+      ].filter(Boolean)),
+    ]),
+    h("div", { className: "agui-iv-kv-grid" }, [
+      h("div", { className: "agui-iv-kv" }, [h("span", { className: "agui-iv-kv__label" }, "Added"), badge(`+${data?.added_lines ?? 0}`, data?.added_lines ? "ok" : "info")]),
+      h("div", { className: "agui-iv-kv" }, [h("span", { className: "agui-iv-kv__label" }, "Removed"), badge(`-${data?.removed_lines ?? 0}`, data?.removed_lines ? "err" : "info")]),
+      h("div", { className: "agui-iv-kv" }, [h("span", { className: "agui-iv-kv__label" }, "Secrets"), badge("Masked server-side", "info")]),
+    ]),
+    previewLines.length
+      ? h("pre", { className: "agui-tool-chip__details" }, previewLines.join("\n"))
+      : h("div", { className: "agui-iv-empty" }, data?.has_changes === false ? "No differences between these revisions." : "Diff loaded."),
+  ]);
+}
+
+function renderHelmDetailsCardView(argsObj, data, uiState, rerender, cb) {
+  const ns = data?.namespace || argsObj?.namespace || "default";
+  const relName = data?.name || argsObj?.release_name || "";
+  const resources = asArray(data?.resources);
+  return h("div", { className: "agui-iv" }, [
+    h("div", { className: "agui-iv-header" }, [
+      h("span", { className: "agui-iv-title" }, `Helm Release · ${ns}/${relName} (Rev ${data?.revision ?? "—"})`),
+      h("div", { className: "agui-iv-actions" }, [
+        relName ? miniBtn("History", () => cb.onOpenHelmHistory?.(ns, relName), "default") : null,
+        Number(data?.revision) > 1
+          ? miniBtn("Diff vs prev", () => cb.onOpenHelmDiff?.(ns, relName, Number(data.revision) - 1, Number(data.revision), "values"), "default")
+          : null,
+      ].filter(Boolean)),
+    ]),
+    h("div", { className: "agui-iv-kv-grid" }, [
+      h("div", { className: "agui-iv-kv" }, [h("span", { className: "agui-iv-kv__label" }, "Chart"), h("span", { className: "agui-iv-mono" }, data?.chart || "—")]),
+      h("div", { className: "agui-iv-kv" }, [h("span", { className: "agui-iv-kv__label" }, "Status"), badge(data?.status || "unknown", statusTone(data?.status || ""))]),
+      h("div", { className: "agui-iv-kv" }, [h("span", { className: "agui-iv-kv__label" }, "Resources"), badge(`${resources.length} items`, "info")]),
+    ]),
   ]);
 }
 
@@ -938,6 +1094,12 @@ export function renderInteractiveToolBody(tc, callbacks = {}) {
       bodyNode = renderNamespaceResourcesView(argsObj, data, uiState, rerender, callbacks);
     } else if (tc.name === "get_helm_releases") {
       bodyNode = renderHelmReleasesView(argsObj, data, uiState, rerender, callbacks);
+    } else if (tc.name === "get_helm_release_history") {
+      bodyNode = renderHelmHistoryCardView(argsObj, data, uiState, rerender, callbacks);
+    } else if (tc.name === "get_helm_release_details") {
+      bodyNode = renderHelmDetailsCardView(argsObj, data, uiState, rerender, callbacks);
+    } else if (tc.name === "diff_helm_revisions") {
+      bodyNode = renderHelmDiffCardView(argsObj, data, uiState, rerender, callbacks);
     } else if (tc.name === "get_events" || tc.name === "get_extended_events") {
       bodyNode = renderEventsView(argsObj, data, uiState, rerender, callbacks);
     } else if (tc.name === "get_nodes") {

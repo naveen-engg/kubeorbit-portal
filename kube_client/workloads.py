@@ -150,7 +150,7 @@ async def get_logical_applications(
         get_statefulsets(context, kubeconfig, ns),
         get_daemonsets(context, kubeconfig, ns),
         get_services(context, kubeconfig, ns),
-        get_pods(context, kubeconfig, ns),
+        get_pods(context, kubeconfig, ns, include_metrics=False),
     )
 
     apps_map: Dict[str, Dict[str, Any]] = {}

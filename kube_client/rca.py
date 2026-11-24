@@ -197,7 +197,7 @@ async def _safe_get_helm_releases(context: str, kubeconfig: Path) -> Dict[str, A
     try:
         from kube_client.resources import get_helm_releases
 
-        res = await get_helm_releases(context, kubeconfig)
+        res = await get_helm_releases(context, kubeconfig, include_resources=False)
         return res if isinstance(res, dict) else {"available": False, "items": []}
     except Exception:
         return {"available": False, "items": []}
@@ -755,7 +755,7 @@ async def diagnose_cluster_issues(
         raw_replicasets,
         helm_data,
     ) = await asyncio.gather(
-        get_pods(context, kubeconfig, ns),
+        get_pods(context, kubeconfig, ns, include_metrics=False),
         get_events(context, kubeconfig, ns, limit=200),
         get_nodes(context, kubeconfig),
         get_deployments(context, kubeconfig, ns),

@@ -1,417 +1,301 @@
 # ☸️ KubeOrbit
-> **Multi-Cloud Cluster Navigator** — A unified portal connecting **GKE**, **EKS**, **AKS**, and **Local Kubernetes** (Minikube / Docker Desktop / Kind) clusters. One UI, one API, isolated credentials — the cloud behind a cluster is just a badge.
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+[![Security: Strictly Read-Only](https://img.shields.io/badge/Security-Strictly_Read--Only-0F9D58.svg)](#-security-architecture)
+[![Secrets: Zero Exposure](https://img.shields.io/badge/Secrets-Metadata_Only_%2F_Masked-1A73E8.svg)](#-security-architecture)
+[![MCP: 27 Read-Only Tools](https://img.shields.io/badge/MCP-27_Read--Only_Tools-6366F1.svg)](#-interactive-ai-stack-ag-ui--google-adk--mcp)
+[![Protocol: AG-UI v1.0](https://img.shields.io/badge/Protocol-AG--UI_v1.0_SSE-0EA5E9.svg)](#-interactive-ai-stack-ag-ui--google-adk--mcp)
+
+> **Strictly Read-Only Multi-Cloud Kubernetes Diagnostics Portal, 12-Step `kubectl apply` Machine, Server-Side Secret-Masked Helm Diff & AG-UI ↔ Google ADK ↔ MCP Navigator**  
+> Unified web control plane across **GCP GKE**, **AWS EKS**, **Azure AKS**, and **Local Kubernetes** (Minikube / Docker Desktop / Kind) — built so developers and on-call SREs can diagnose staging & production safely with **zero write permissions**, **zero Secret exposure**, and **zero static cloud credentials**.
 
 ---
 
-## 🧭 Overview & Portal Use Case
+## 🧭 Why KubeOrbit?
 
-Modern engineering teams run Kubernetes workloads across multiple cloud providers and local development environments. Navigating, switching, and authenticating across fragmented cloud consoles and isolated kubeconfig files creates friction.
+Most Kubernetes tools (Lens, K9s, Headlamp, Rancher) assume desktop `~/.kube/config` sprawl and write/exec permissions — which is exactly why SecOps teams ban developers from connecting them to production clusters.
 
-**KubeOrbit** solves this by providing a single, zero-pollution control plane to:
-- **Connect & Switch Seamlessly**: Instantly onboard and switch between **GKE**, **EKS**, **AKS**, and **Local** clusters without context collisions.
-- **Isolated Kubeconfigs**: Every connected cluster receives its own isolated kubeconfig file (`~/.kubeorbit/kubeconfigs/<cluster-id>.yaml`), eliminating `~/.kube/config` pollution.
-- **In-Process Python SDK Client**: High-performance, low-latency resource inspection powered by the official Python Kubernetes SDK (`kubernetes`), connection pooling, and in-memory caching.
-- **Cloud-Specific Log & Auth Integration**: Native cloud authentication adapters with zero hardcoded credentials and direct access to cluster logs and audit streams.
+**KubeOrbit turns strict read-only safety into its core design:**
+- **Strictly Read-Only by Default (`KUBEORBIT_READ_ONLY=true`)**: Zero `kubectl exec`, zero YAML edits, zero pod deletions, and cluster write endpoints return `403 Forbidden` out of the box.
+- **Zero Kubernetes Secret Value Exposure**: Secret value reveal is permanently removed, `GET /manifest?kind=Secret` (including `secrets.v1` / `v1/Secret`) returns `403 Forbidden`, resource lists return **metadata only** (name, type, key names), and Helm values/manifest diffs **mask all secret values server-side** with SHA-256 change fingerprints (`<masked:fp=...>`) so you can still spot secret rotations without leaking plaintext.
+- **Zero-Pollution Multi-Cloud Access**: Isolated per-cluster kubeconfigs under `~/.kubeorbit/kubeconfigs/<cluster-id>.yaml`, keyless OIDC Workload Identity Federation across GCP/AWS/Azure, and in-process Python Kubernetes SDK connection pooling.
+- **The 12-Step `kubectl apply` Machine**: Interactive radial telemetry diagram and Root-Cause Analysis (RCA) engine tracing every workload from `kubectl apply` (Step 1) through `kube-apiserver`, `etcd`, controllers, `kube-scheduler` (Step 9), `kubelet` (Steps 10a–10d), readiness probes (Step 11), and `EndpointSlice` traffic routing (Step 12), with live **Helm**, **Argo CD**, and **Prometheus** delivery detection.
+- **Complete Helm Governance Suite**: Cluster-wide **Helm Releases** inventory with clickable live resource health squares, full **Version History** timeline, and a side-by-side **Diff Viewer** across User Values, Computed Values, and Rendered Manifests.
+- **AG-UI v1.0 ↔ Google ADK ↔ 27 Read-Only MCP Tools**: Docked, resizable sliding **Ask AI** split-pane drawer powered by Vertex AI Gemini (`gemini-3.5-flash`), streaming AG-UI SSE events, interactive drill-down MCP result cards, and live Portal UI sync — plus a standalone FastMCP server (`stdio` / Streamable HTTP) for external AI clients.
 
 ---
 
-## 🏛️ Architecture & Multi-Cloud Connection Flow
+## ⚖️ How KubeOrbit Compares (2026 Landscape)
 
-```
-                                  ┌──────────────────────────────────────────────────────────┐
-                                  │                KubeOrbit Web Portal UI                   │
-                                  │      (Pure HTML5 / Vanilla CSS / Material Design 3)      │
-                                  └─────────────────────────────┬────────────────────────────┘
-                                                                │ REST API / WebSocket
-                                                                ▼
-                                  ┌──────────────────────────────────────────────────────────┐
-                                  │               FastAPI Backend Engine (app.py)            │
-                                  │  - Auth Manager (auth.py)                                │
-                                  │  - Config & Registry (config.py)                         │
-                                  │  - Python Kube Client & Client Pool (kube_client.py)     │
-                                  └──────────────┬────────────────────────────┬──────────────┘
-                                                 │                            │
-                     ┌───────────────────────────┴────────────┐               │
-                     │ Isolated Kubeconfig Storage            │               │
-                     │ (~/.kubeorbit/kubeconfigs/*.yaml)      │               │
-                     └───────────────────────────┬────────────┘               │
-                                                 │                            │
-         ┌───────────────────────────────────────┼────────────────────────────┼───────────────────────────────────────┐
-         │                                       │                            │                                       │
-         ▼                                       ▼                            ▼                                       ▼
-┌──────────────────┐                   ┌──────────────────┐         ┌──────────────────┐                   ┌──────────────────┐
-│     GCP GKE      │                   │     AWS EKS      │         │    Azure AKS     │                   │  Local Clusters  │
-├──────────────────┤                   ├──────────────────┤         ├──────────────────┤                   ├──────────────────┤
-│ Auth:            │                   │ Auth:            │         │ Auth:            │                   │ Auth:            │
-│  gcloud / IAM    │                   │  aws / STS Role  │         │  az / Entra ID   │                   │  Direct Certs    │
-│  SA Impersonation│                   │  (AssumeRole)    │         │  (kubelogin)     │                   │  (Kube Context)  │
-│                  │                   │                  │         │                  │                   │                  │
-│ Logs:            │                   │ Logs:            │         │ Logs:            │                   │ Logs:            │
-│  Cloud Logging   │                   │  CloudWatch Logs │         │  Azure Monitor   │                   │  Containerd /    │
-│  (Stackdriver)   │                   │  (Log Streams)   │         │  (Log Analytics) │                   │  Docker Engine   │
-└──────────────────┘                   └──────────────────┘         └──────────────────┘                   └──────────────────┘
-```
+| Capability | **KubeOrbit** | **Headlamp** *(CNCF)* | **Lens Desktop** | **K9s** | **Rancher** | **Komodor** | **HolmesGPT / K8sGPT** *(CNCF)* |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Strictly Read-Only by Default** | **Yes** | No *(RBAC-based write)* | No *(IDE write/exec)* | No *(TUI write/exec)* | No *(full lifecycle)* | Guarded writes | Mostly read-only |
+| **Hard Block on K8s Secret Values & YAML** | **Yes (`403` + masked Helm diffs)** | Follows K8s RBAC | Decodes if RBAC allows | Decodes (`x`) if RBAC allows | Follows RBAC | Governance RBAC | `--anonymize` flag (K8sGPT) |
+| **Zero-Agent Single Container (Cloud Run / Docker)** | **Yes** | Desktop or in-cluster | Heavy Electron app | Local Go binary | Heavy HA control plane | SaaS + in-cluster agent | CLI / in-cluster operator |
+| **Native Multi-Cloud Keyless WIF (GKE + EKS + AKS)** | **Yes** | Local/OIDC kubeconfig | Local kubeconfig | Local kubeconfig | Cluster agents | In-cluster agents | Local / operator |
+| **12-Step Visual `kubectl apply` RCA** | **Built-in** | — | — | — | — | Change timeline | Text/Slack RCA |
+| **Network, Storage & Resource Topology Maps** | **Built-in** | Plugins | Basic | — | Basic | Service map | — |
+| **Helm History & Secret-Masked Revision Diff** | **Built-in** | Basic / plugins | Manage charts | Basic | App catalog | Change tracking | — |
+| **Live AG-UI Sliding Split-Pane + 27 Read-Only MCP Tools** | **Built-in** | Plugins | Paid Prism AI | Plugins | — | Commercial AI SRE | Strong CLI/Slack/MCP |
+| **License & Pricing** | **Apache 2.0 (Free)** | Apache 2.0 (Free) | Freemium / Paid Pro | Apache 2.0 (Free) | OSS / Paid Prime | Enterprise Contract | Apache 2.0 (Free) |
 
-### Visual Connection & Authentication Diagram (Mermaid)
+---
+
+## 🏛️ System Architecture
 
 ```mermaid
-graph TD
-    UI[KubeOrbit Web Portal] -->|HTTP / JSON| Backend[FastAPI Backend Engine]
-    Backend --> AuthPool[Python Kubernetes SDK Client Pool]
-    Backend --> Isolator[Isolated Kubeconfig Manager]
+flowchart LR
+    UI["KubeOrbit Portal UI\napp.js · helm.js · agui.js · agui_views.js\ntopology.js · resourcemap.js · SWR Cache"]
 
-    subgraph Cloud Adapters & Auth
-        Isolator -->|gcloud auth / SA Impersonation| GKE[GCP GKE Adapter]
-        Isolator -->|aws sts assume-role| EKS[AWS EKS Adapter]
-        Isolator -->|az login / kubelogin| AKS[Azure AKS Adapter]
-        Isolator -->|~/.kube/config context scan| LOCAL[Local Cluster Adapter]
+    subgraph Backend["FastAPI Engine (app.py)"]
+        API["REST + SSEAwareGZip + Auth Middleware\nauth.py · config.py (Async Secret Manager Sync)"]
+        AGUI["AG-UI v1.0 SSE Endpoint\n/api/clusters/{id}/ai/ag-ui"]
+        RCA["12-Step RCA · Helm Diff · SDK Pool\nkube_client/"]
     end
 
-    subgraph Cluster Endpoints & Cloud Logs
-        GKE -->|Pod Logs & Audit| GCPLogs[(Google Cloud Logging)]
-        EKS -->|Pod Logs & Audit| AWSLogs[(AWS CloudWatch Logs)]
-        AKS -->|Pod Logs & Audit| AZLogs[(Azure Monitor Logs)]
-        LOCAL -->|Container Logs| LocalLogs[(Docker / Minikube Engine)]
+    subgraph AgentStack["Google ADK + MCP (ai_agent.py · mcp_server/)"]
+        ADK["LlmAgent (Vertex AI Gemini)\nStreamingMode.SSE · LRU Sessions"]
+        MCP["27 Read-Only MCP Tools\nmcp_server/tools.py (HTTP GET only)"]
+        UITools["6 Interactive Portal UI Tools\nnavigate · filter · inspect · logs · yaml*"]
     end
 
-    AuthPool -->|In-Process TLS Keep-Alive| GKE
-    AuthPool -->|In-Process TLS Keep-Alive| EKS
-    AuthPool -->|In-Process TLS Keep-Alive| AKS
-    AuthPool -->|In-Process TLS Keep-Alive| LOCAL
+    subgraph Adapters["Zero-Key Cluster Adapters (providers/)"]
+        GKE["GCP GKE\nSA Impersonation / ADC"]
+        EKS["AWS EKS\nOIDC WIF -> STS AssumeRole"]
+        AKS["Azure AKS\nEntra Federated ID + kubelogin"]
+        LOCAL["Local Kubernetes\n~/.kube/config (disabled on Cloud Run)"]
+    end
+
+    UI <-->|"REST JSON (GZip + SWR)"| API
+    UI <-->|"AG-UI v1.0 SSE\nSTATE_SNAPSHOT · TOOL_CALL_* · CUSTOM"| AGUI
+    API --> RCA
+    AGUI --> ADK
+    ADK -->|"In-process IAP identity propagation"| MCP
+    MCP -->|"HTTP GET /api/..."| API
+    ADK -->|"CUSTOM: ui_action"| AGUI
+    RCA --> Adapters
 ```
 
----
-
-## ☁️ Cloud & Local Connection Adapters
-
-### 1. Google Kubernetes Engine (GKE)
-- **Authentication**: Uses ambient `gcloud` credentials or Service Account impersonation (`roles/iam.serviceAccountTokenCreator`).
-- **Data Plane**: Automatic token minting via `gke-gcloud-auth-plugin`.
-- **Logs Architecture**:
-  - **In-Cluster Container Logs**: Streamed directly via the Kubernetes API client.
-  - **Control Plane & Cloud Audit Logs**: Exported to **Google Cloud Logging** (`projects/<id>/logs/cloudaudit.googleapis.com` & `k8s_container` logs).
-
-### 2. AWS Elastic Kubernetes Service (EKS)
-- **Authentication**: Leverages AWS CLI profiles or cross-account IAM role assumption via `sts:AssumeRole`.
-- **Data Plane**: Generates short-lived presigned STS authentication tokens.
-- **Logs Architecture**:
-  - **In-Cluster Container Logs**: Streamed directly via the Kubernetes API client.
-  - **Control Plane & Audit Logs**: Sent to **Amazon CloudWatch Log Groups** (`/aws/eks/<cluster-name>/cluster`).
-
-### 3. Azure Kubernetes Service (AKS)
-- **Authentication**: Interactive `az login` or dedicated Azure Service Principals (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`).
-- **Data Plane**: Entra ID / Azure AD authentication handled transparently via `kubelogin`.
-- **Logs Architecture**:
-  - **In-Cluster Container Logs**: Streamed directly via the Kubernetes API client.
-  - **Control Plane & Diagnostics**: Ingested into **Azure Log Analytics / Azure Monitor**.
-
-### 4. Local Clusters (Minikube / Docker Desktop / Kind)
-- **Authentication**: Directly inspects and extracts selected context configurations from local kubeconfig files (`~/.kube/config`) into isolated workspaces.
-- **Data Plane**: Direct mutual TLS (mTLS) with client certificates or embedded tokens.
-- **Logs Architecture**:
-  - **In-Cluster Container Logs**: Streamed directly via the Kubernetes Core API.
-  - **Host Container Runtime Logs**: Accessible via `minikube logs` or local Docker daemon stdout.
+*\*`ui_open_manifest` and `GET /manifest` enforce a hard block (`403` / `ok=False`) on `Secret` objects.*
 
 ---
 
-## 🚀 Quick Start (Local Setup)
+## ⚓ Helm Releases, Version History & Secret-Masked Diff
 
-You can run **KubeOrbit** either **natively with Python** on your machine or as a **Zero-Keys Docker container** with all cloud CLIs and host sessions pre-mounted.
+Built in [`kube_client/helm.py`](./kube_client/helm.py) and [`static/helm.js`](./static/helm.js):
+- **Helm Releases View**: Lists releases across namespaces with search/namespace filters, current revision, chart/app version, live status pill, and clickable **resource health squares** (clicking a Pod opens Pod Inspector; clicking a Secret safely opens the masked Release Details modal).
+- **Helm Version History View**: Full revision timeline per release (`deployed`, `superseded`, `failed`), descriptions, timestamps, and 1-click **`vs previous`** / **`vs current`** diff shortcuts.
+- **Helm Diff Viewer**: Side-by-side / unified diff across **User Values**, **Computed Values**, and **Rendered Manifest YAML** with **server-side secret masking** — every Kubernetes `Secret` `data`/`stringData` entry and credential-like key (`password`, `token`, `api_key`, `private_key`, etc.) is replaced with a deterministic fingerprint (`<masked:fp=a1b2c3d4>`) so engineers can verify whether a secret changed between revisions without ever seeing the raw secret.
 
 ---
 
-### **Option A: Running Locally with Python (Native)**
+## 🤖 Interactive AI Stack (AG-UI ↔ Google ADK ↔ MCP)
 
-#### 1. Prerequisites
-- **Python 3.10+**
-- **Kubernetes CLI (`kubectl`)**
-- *(Optional)* Cloud CLIs for your clouds:
-  - **GCP**: `gcloud` + `google-cloud-cli-gke-gcloud-auth-plugin`
-  - **AWS**: `aws` (AWS CLI v2)
-  - **Azure**: `az` (Azure CLI) + `kubelogin`
+KubeOrbit implements the **AG-UI (Agent-to-UI) Protocol v1.0** natively over Server-Sent Events (`POST /api/clusters/{cluster_id}/ai/ag-ui`) backed by **Google ADK (`google-adk`)** on **Vertex AI Gemini** (`gemini-3.5-flash` by default; zero static API keys via ADC or attached Cloud Run Service Account):
 
-#### 2. Virtual Environment & Dependencies
+- **Docked Sliding Split-Pane Drawer**: Smoothly docks alongside the active view (`#ai-chat-panel`) with a draggable column resizer (`320px–760px`, persisted in `localStorage`) and automatic SVG reflow so topologies and 12-Step diagrams stay visible side-by-side.
+- **Context-Aware Quick Prompts**: Dynamically adapts to the active portal view and selected namespace.
+- **Interactive Drill-Down MCP Cards ([`static/agui_views.js`](./static/agui_views.js))**: Rich interactive cards for namespaces, namespace resources (Secrets clearly marked **`Metadata only`**), Helm releases/history/diffs, events, nodes, workloads, 12-Step RCA, pod inspector, logs, manifests, topologies, ecosystem CRDs, cost, and audit logs — plus a collapsed **`Raw JSON & Args`** drawer on every card.
+- **Standalone Read-Only MCP Server ([`mcp_server/README.md`](./mcp_server/README.md))**: All **27 read-only MCP tools** (`readOnlyHint=True`, `destructiveHint=False`, strictly HTTP `GET`), including `get_helm_releases`, `get_helm_release_details`, `get_helm_release_history`, and `diff_helm_revisions`:
+
 ```bash
-# Clone the repository
-cd k8s_lens
+# Stdio transport (Claude Desktop, Cursor, Gemini CLI, local ADK clients)
+python -m mcp_server.server
 
-# Create virtual environment & activate
-python -m venv .venv
-source .venv/bin/activate       # On Windows: .venv\Scripts\activate
-
-# Install dependencies (FastAPI, Uvicorn, Python Kubernetes SDK)
-pip install -r requirements.txt
-```
-
-#### 3. Host Cloud Authentication (One-time)
-```bash
-# GCP GKE (OAuth2 + SA Impersonation)
-gcloud auth login && gcloud auth application-default login
-
-# AWS EKS (IAM SSO or Access Keys)
-aws configure   # or: aws sso login
-
-# Azure AKS (Entra ID Login)
-az login
-
-# Minikube / Local Kubernetes
-minikube start --driver=docker
-```
-
-#### 4. Run KubeOrbit
-```bash
-python -m uvicorn app:app --reload --port 8080
-```
-Open **http://127.0.0.1:8080** in your browser.
-
----
-
-### **Option B: Running with Docker Compose (Zero-Keys Container)**
-
-The Docker setup runs KubeOrbit in an isolated Linux container bundled with `kubectl`, `helm`, `gcloud`, `aws`, and `az`. It mounts your active host cloud logins and local Kubernetes configurations directly into the container with **zero static JSON keys or passwords**.
-
-#### 1. Prerequisites
-- **Docker Desktop** (running on Windows, macOS, or Linux)
-- Ensure placeholder CLI folders exist on your host (created automatically by the starter script):
-  ```powershell
-  # Windows PowerShell (if not already present):
-  New-Item -ItemType Directory -Path "$HOME\.aws", "$HOME\.azure", "$HOME\.kubeorbit\kubeconfigs" -Force
-  ```
-
-#### 2. Start KubeOrbit Container
-Use the automated startup script or standard `docker compose`:
-
-* **On Windows (PowerShell)**:
-  ```powershell
-  .\start-docker.ps1
-  ```
-
-* **On Linux / macOS (Bash)**:
-  ```bash
-  chmod +x start-docker.sh
-  ./start-docker.sh
-  ```
-
-* **Or using Docker Compose directly**:
-  ```bash
-  docker compose up -d --build
-  ```
-
-#### 3. Access KubeOrbit
-Open **http://localhost:8080** in your browser.
-
-#### 4. Managing the Docker Container
-```bash
-# View live logs
-docker logs -f kubeorbit
-
-# Restart container
-docker compose restart
-
-# Stop container
-docker compose down
-
-# Check container and CLI status
-curl http://localhost:8080/api/status
+# Streamable HTTP transport (standalone MCP service)
+KUBEORBIT_MCP_TRANSPORT=streamable-http python -m mcp_server.server
 ```
 
 ---
 
-### 📦 Docker Volume Mount Architecture
+## 🔬 The 12-Step `kubectl apply` Machine & Autonomous RCA
 
-The container mounts the following host directories into the container to enable seamless multi-cloud access without copying static keys:
-
-| Mount Mapping | Purpose |
-| :--- | :--- |
-| **`${APPDATA}/gcloud:/root/.config/gcloud`** | Shares host `gcloud auth login` session & Service Account impersonation. Tokens refresh automatically in background. |
-| **`${USERPROFILE}/.aws:/root/.aws`** | Mounts host AWS IAM credentials, profiles, and IAM Identity Center (SSO) tokens. |
-| **`${USERPROFILE}/.azure:/root/.azure`** | Mounts host Azure CLI profile and Microsoft Entra ID tokens. |
-| **`${USERPROFILE}/.kube:/root/.kube`** | Shares host local Kubernetes contexts (`docker-desktop`, `kind`, `minikube`). |
-| **`${USERPROFILE}/.minikube:/root/.minikube`** | Shares Minikube mTLS client certificates (`ca.crt`, `client.crt`, `client.key`). |
-| **`${USERPROFILE}/.kubeorbit:/root/.kubeorbit`** | Persists isolated cluster kubeconfigs on your host across container restarts. |
-| **`./config/clusters.yaml:/app/config/clusters.yaml`** | Persists added, modified, or deleted cluster configurations directly to disk. |
+Built in [`kube_client/rca.py`](./kube_client/rca.py) and documented in [`docs/12_STEP_KUBECTL_APPLY_MACHINE.md`](./docs/12_STEP_KUBECTL_APPLY_MACHINE.md):
+- **End-to-End Pipeline Attribution**: Maps live pods, events, deployments, ReplicaSets, services, NetworkPolicies, and logs onto Steps `1–12`:
+  - **Steps 1–6 (Control Plane & Storage)**: `kubectl apply` (`1`) → `authn` (`2`) → `rbac-authz` (`3`) → `mutating-admission` (`4`) → `schema/validating-admission` (`5`) → `etcd` (`6`).
+  - **Steps 7–8 (Controllers)**: `deployment-controller` (`7`) → `replicaset-controller` + `pod-security` / `ResourceQuota` (`8`).
+  - **Step 9 (`kube-scheduler`)**: Node capacity, taints/tolerations, affinity, unbound PVC (`Pending`).
+  - **Step 10 (`kubelet`)**: `10a` CSI/Secret mount, `10b` CNI sandbox, `10c` Image pull (`ImagePullBackOff`), `10d` `containerd` runtime (`CrashLoopBackOff`, `OOMKilled`, `CreateContainerConfigError`).
+  - **Step 11 (`readinessProbe`)**: Running container `0/1 Ready`.
+  - **Step 12 (`endpointslice-controller` / `kube-proxy`)**: 0 ready Service endpoints / missing `NetworkPolicy`.
+- **Interactive Telemetry**: Namespace filter, clickable step badges (`1–12`), symptom folding into ranked Root Causes with exact `kubectl` verification/remediation commands, **`▶ Replay 12-Step Flow`** animation, and live **Helm**, **Argo CD**, and **Prometheus** pipeline detection.
 
 ---
 
-## ⚙️ Configuration (`config/clusters.yaml`)
+## ⚡ Performance Engineering
 
-Define your teams, environments, and cluster coordinates. No credentials or secrets are stored in YAML — only resource identifiers:
+Engineered for snappy multi-cluster navigation on Cloud Run and local workstations:
+- **Client-Side SWR Cache (`static/app.js`, `static/helm.js`)**: Instant `0ms` paint on recently visited tabs (`<10s`), instant stale paint + silent background refresh (`10–30s`), 30s Helm inventory/history reuse, 60s sidebar `/nodes` throttle, and explicit top-bar **Refresh** (`POST /api/clusters/{id}/refresh`) that busts both client and server data caches on demand.
+- **Backend Concurrency & Caching (`kube_client/`)**: Per-cluster SDK init locks, Gateway API group-qualified SDK reads, 300s cluster-wide negative caching for absent optional CRDs (`crd_missing`), single-call CRD discovery (`ApiextensionsV1Api`), skipping `kubectl top pods` on views that don't display pod metrics, cached enriched Helm release payloads, parallelized `/info`/topology gathers, and non-blocking background GCP Secret Manager refresh (`config.py`).
+- **Transport Optimization (`app.py`, `static/index.html`)**: `SSEAwareGZipMiddleware` (compresses JSON/JS/CSS without buffering `/ai/ag-ui` SSE streams), `<link rel="modulepreload">` eliminating duplicate ES-module downloads, versioned `?v=` static cache headers, and an inline SVG favicon.
 
-```yaml
-teams:
-  - id: platform
-    name: Platform Engineering
-    environments:
-      - id: sandbox
-        clusters:
-          - id: minikube
-            name: Minikube Local Cluster
-            provider: local
-            environment: sandbox
-            description: Local single-node Minikube cluster
-            config:
-              kubeconfig_path: ~/.kube/config
-              context_name: minikube
+---
 
-          - id: prod-gke
-            name: Production GKE
-            provider: gke
-            environment: prod
-            config:
-              project_id: my-gcp-project
-              region: us-central1
-              cluster_name: prod-cluster
-              impersonate_service_account: kubeorbit-reader@my-gcp-project.iam.gserviceaccount.com
+## 📁 Repository Structure
 
-settings:
-  excluded_namespace_patterns:
-    - kube-system
-    - kube-public
-    - kube-node-lease
-  default_refresh_interval_seconds: 30
+```text
+.
+├── app.py                        # FastAPI server, REST routes, AG-UI SSE, SSEAwareGZip, static caching
+├── ai_agent.py                   # Google ADK LlmAgent, Vertex AI setup, AG-UI v1.0 & 6 UI tools
+├── auth.py                       # IAP / Azure AD / API Key auth, 3-Tier RBAC, GCP Custom IAM lookup
+├── config.py                     # Multi-cloud ConfigStore, RuntimeEnv (KUBEORBIT_READ_ONLY), async Secret Manager sync
+├── kube_client/                  # Modular Kubernetes & Helm engine (official SDK + async CLI helpers)
+│   ├── _cache.py                 # Singleflight async TTLCache
+│   ├── _cli.py                   # Flag-injection & timeout guarded subprocess runner
+│   ├── _fetch.py / _sdk.py       # SDK list adapters, CRD negative cache & pooled API clients
+│   ├── helm.py                   # Helm inventory, revision history, server-side secret masking & structured diff
+│   ├── rca.py                    # 12-Step kubectl apply RCA engine, folding & delivery detection
+│   ├── logs.py                   # Pod logs & Secret-blocked resource YAML fetcher (is_secret_kind)
+│   └── workloads.py / resources.py / topology.py / ecosystem.py / events.py / audit.py / normalize.py
+├── mcp_server/                   # Standalone & in-process Read-Only FastMCP server (27 HTTP-GET tools)
+├── providers/                    # Pluggable cluster auth & cloud metadata adapters (gke, eks, aks, local, pricing)
+├── static/                       # Zero-build ES-module frontend (index.html, app.js, helm.js, agui.js, agui_views.js, ...)
+├── terraform/                    # Production IaC stacks (Cloud Run + IAP, GKE, EKS OIDC WIF, AKS Federated ID)
+├── tests/                        # 115+ unit, integration, concurrency, Helm, AG-UI, and security tests
+├── config/clusters.example.yaml  # Sample multi-team / multi-cloud cluster registry
+├── docs/                         # 12-Step kubectl apply Machine documentation & diagrams
+├── sample-app.yaml               # Demo K8s workloads + intentional Step 9–12 stall scenarios
+├── LICENSE                       # Apache License 2.0
+└── Dockerfile / docker-compose.yml / start-docker.ps1 / start-docker.sh
 ```
 
 ---
 
-## 🔒 Security & Credential Isolation
-
-- **Zero Global Pollution**: Every cluster operates in its own sandbox directory under `~/.kubeorbit/kubeconfigs/`.
-- **No Stored Keys or Passwords**: Authentication relies on OAuth2 tokens, IAM role assumption, and Azure AD tokens generated on demand.
-- **RBAC Enforcement**: The portal only requires read-only cluster permissions (`ClusterRole: get, list, watch`).
-- **Token Refresh**: When your cloud session tokens expire after 1 hour, `gcloud` and cloud SDKs refresh access tokens automatically inside the container without requiring container restarts.
-
----
-
-## 🏢 Enterprise Production Deployment (Zero-Keys Multi-Cloud)
-
-For enterprise environments, KubeOrbit is packaged as an immutable container and deployed across any cloud provider. All cross-cloud authentication is handled via **Workload Identity Federation (WIF) / OIDC Exchange** — ensuring **zero long-lived API keys, secrets, or passwords** anywhere in configuration or storage.
-
-```
-┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                             ENTERPRISE WORKLOAD IDENTITY FEDERATION                              │
-└──────────────────────────────────────────────────────────────────────────────────────────────────┘
-                 GCP Cloud Run                     AWS ECS Fargate                 Azure Container Apps
-               (GCP Service Account)               (AWS Task Role)               (Azure Managed Identity)
-                        │                                 │                                  │
-         ┌──────────────┴──────────────┐   ┌──────────────┴──────────────┐    ┌──────────────┴──────────────┐
-         ▼                             ▼   ▼                             ▼    ▼                             ▼
-    GCP Native (GKE)            AWS OIDC Fed (EKS)  AWS Native (EKS)   GCP WIF Pool (GKE)  Azure Native (AKS)   GCP / AWS Fed
-  (Attached IAM SA)           (AssumeRoleWithWebID)(ECS Task Role)     (STS Exchange SA)   (Entra ID Managed)   (OIDC Exchange)
-```
-
----
-
-### **1. Deployment on GCP Cloud Run**
-
-Deploy KubeOrbit as a managed serverless container fronted by Google Cloud Load Balancing and **Identity-Aware Proxy (IAP)**.
-
-#### Architecture & Flow:
-- **Hosting**: Google Cloud Run (Fully Managed, CPU boost on request).
-- **Service Identity**: Dedicated Service Account `kubeorbit-runner@<project>.iam.gserviceaccount.com`.
-- **GKE Authentication**: Direct GCP IAM token generation via attached Service Account + GKE RBAC `ClusterRoleBinding`.
-- **Cross-Cloud EKS Auth**: AWS IAM Role configured with Web Identity Federation trusting Google OIDC tokens (`accounts.google.com`). KubeOrbit exchanges its GCP identity token with `sts:AssumeRoleWithWebIdentity` to access EKS.
-- **Cross-Cloud AKS Auth**: Microsoft Entra ID Federated Credential trusting GCP Service Account token issuer.
-- **Config Storage**: Synced dynamically from **GCP Secret Manager** (`USE_GCP_SECRET_MANAGER=true`).
-- **Perimeter Auth**: Google Cloud IAP (`KUBEORBIT_AUTH_MODE=iap`), validating signed `X-Goog-Authenticated-User-Email` JWT headers.
-
-#### Deployment Command:
-```bash
-gcloud run deploy kubeorbit \
-  --image=gcr.io/<project-id>/kubeorbit:latest \
-  --region=us-central1 \
-  --service-account=kubeorbit-runner@<project-id>.iam.gserviceaccount.com \
-  --set-env-vars="KUBEORBIT_AUTH_MODE=iap,USE_GCP_SECRET_MANAGER=true,GCP_PROJECT_ID=<project-id>" \
-  --ingress=internal-and-cloud-load-balancing \
-  --allow-unauthenticated=false \
-  --port=8080
-```
-
----
-
-### **2. Deployment on AWS ECS (Fargate)**
-
-Deploy KubeOrbit as an auto-scaling serverless container task behind an **Application Load Balancer (ALB)** with **AWS Cognito / OIDC** authentication.
-
-#### Architecture & Flow:
-- **Hosting**: AWS Elastic Container Service (ECS) with AWS Fargate serverless compute.
-- **Task Identity**: ECS Task Role `arn:aws:iam::<account-id>:role/KubeOrbitTaskRole`.
-- **EKS Authentication**: Direct IAM Task Role credentials + EKS Access Entry (`AmazonEKSClusterAdminPolicy` or custom read-only access policy).
-- **Cross-Cloud GKE Auth**: Google Cloud **Workload Identity Federation (WIF)**. KubeOrbit generates an AWS STS caller token and exchanges it with a GCP Workload Identity Pool provider (`https://sts.amazonaws.com`) to impersonate a GCP Service Account for GKE.
-- **Cross-Cloud AKS Auth**: Azure Entra ID Workload Identity trusting AWS STS OIDC assertions.
-- **Config Storage**: Stored securely in **AWS Secrets Manager** or AWS Systems Manager Parameter Store.
-- **Perimeter Auth**: AWS ALB Cognito / Okta integration (`KUBEORBIT_AUTH_MODE=api_key` or custom header inspection).
-
-#### ECS Task Definition Example:
-```json
-{
-  "family": "kubeorbit-task",
-  "taskRoleArn": "arn:aws:iam::<account-id>:role/KubeOrbitTaskRole",
-  "executionRoleArn": "arn:aws:iam::<account-id>:role/KubeOrbitExecutionRole",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "1024",
-  "memory": "2048",
-  "containerDefinitions": [
-    {
-      "name": "kubeorbit",
-      "image": "<account-id>.dkr.ecr.us-east-1.amazonaws.com/kubeorbit:latest",
-      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
-      "environment": [
-        { "name": "KUBEORBIT_AUTH_MODE", "value": "api_key" },
-        { "name": "KUBEORBIT_LOG_LEVEL", "value": "INFO" }
-      ]
-    }
-  ]
-}
-```
-
----
-
-### **3. Deployment on Azure Container Apps (ACA / ACS)**
-
-Deploy KubeOrbit as a serverless container app integrated with **Microsoft Entra ID (Azure AD Easy Auth)**.
-
-#### Architecture & Flow:
-- **Hosting**: Azure Container Apps (ACA) or Azure App Service for Containers.
-- **Identity**: User-Assigned Managed Identity (UAMI) `id-kubeorbit-prod`.
-- **AKS Authentication**: Direct Azure RBAC `Azure Kubernetes Service Cluster User Role` + `kubelogin` using Managed Identity credentials (`AZURE_CLIENT_ID`).
-- **Cross-Cloud GKE Auth**: GCP Workload Identity Pool trusting Azure Entra ID tokens (`https://login.microsoftonline.com/<tenant-id>/v2.0`).
-- **Cross-Cloud EKS Auth**: AWS IAM Role with OIDC Trust Policy pointing to Azure Entra ID OIDC issuer.
-- **Config Storage**: Mounted securely from **Azure Key Vault** via Container Apps Secret References.
-- **Perimeter Auth**: Azure Container Apps **Easy Auth** (`KUBEORBIT_AUTH_MODE=azure_ad`), validating incoming `X-MS-CLIENT-PRINCIPAL-NAME` headers.
-
-#### Azure CLI Deployment Command:
-```bash
-az containerapp create \
-  --name kubeorbit \
-  --resource-group rg-platform-prod \
-  --environment env-kubeorbit \
-  --image <acr-name>.azurecr.io/kubeorbit:latest \
-  --target-port 8080 \
-  --ingress external \
-  --user-assigned id-kubeorbit-prod \
-  --env-vars \
-    KUBEORBIT_AUTH_MODE=azure_ad \
-    AZURE_CLIENT_ID=<managed-identity-client-id>
-```
-
----
-
-### 🛡️ Cross-Cloud Keyless Authentication Matrix
+## ☁️ Cloud, Local & Keyless Federation Support
 
 | Hosting Environment | Target Cluster | Authentication Protocol | Static Secret Required? |
 | :--- | :--- | :--- | :---: |
-| **GCP Cloud Run** | **GCP GKE** | Attached Service Account + `gke-gcloud-auth-plugin` | ❌ **Zero Keys** |
-| **GCP Cloud Run** | **AWS EKS** | AWS IAM OIDC Web Identity Federation (`sts:AssumeRoleWithWebIdentity`) | ❌ **Zero Keys** |
-| **GCP Cloud Run** | **Azure AKS** | Microsoft Entra Workload ID (Federated Credentials) | ❌ **Zero Keys** |
-| **AWS ECS Fargate** | **AWS EKS** | ECS Task Role (`sts:AssumeRole` + EKS Access Entry) | ❌ **Zero Keys** |
-| **AWS ECS Fargate** | **GCP GKE** | GCP Workload Identity Federation (AWS STS Pool Exchange) | ❌ **Zero Keys** |
-| **AWS ECS Fargate** | **Azure AKS** | Microsoft Entra Workload ID (AWS OIDC Token Exchange) | ❌ **Zero Keys** |
-| **Azure Container Apps** | **Azure AKS** | User-Assigned Managed Identity + `kubelogin` | ❌ **Zero Keys** |
-| **Azure Container Apps** | **GCP GKE** | GCP Workload Identity Federation (Azure Entra ID Exchange) | ❌ **Zero Keys** |
-| **Azure Container Apps** | **AWS EKS** | AWS IAM OIDC Federation (Azure Entra ID Token Exchange) | ❌ **Zero Keys** |
+| **Local Workstation / Docker** | **GKE / EKS / AKS / Local** | Host `gcloud`, `aws`, `az`, `~/.kube/config` session mounts | **Zero Keys** |
+| **GCP Cloud Run** | **GCP GKE** | Attached `kubeorbit-runner` SA + `gke-gcloud-auth-plugin` (or SA impersonation) | **Zero Keys** |
+| **GCP Cloud Run** | **AWS EKS** | GCP OIDC ID Token → `aws sts assume-role-with-web-identity` (`providers/eks.py`) | **Zero Keys** |
+| **GCP Cloud Run** | **Azure AKS** | GCP OIDC ID Token → `az login --federated-token` + `kubelogin` (`providers/aks.py`) | **Zero Keys** |
+| **AWS ECS Fargate** | **EKS / GKE / AKS** | ECS Task Role + STS / GCP WIF Pool / Entra Federated Identity | **Zero Keys** |
+| **Azure Container Apps** | **AKS / GKE / EKS** | User-Assigned Managed Identity + `kubelogin` / GCP WIF / AWS OIDC | **Zero Keys** |
+
+---
+
+## 🚀 60-Second Quick Start (Local Demo)
+
+### Option A: Native Python
+1. **Prerequisites**: Python 3.10+, `kubectl`, optional `helm` / `gcloud` / `aws` / `az`.
+2. **Install & Configure**:
+   ```bash
+   python -m venv .venv
+   # Linux / macOS:
+   source .venv/bin/activate
+   # Windows PowerShell:
+   .venv\Scripts\Activate.ps1
+
+   pip install -r requirements.txt
+   cp .env.example .env
+   cp config/clusters.example.yaml config/clusters.yaml
+   ```
+3. **Run the Portal**:
+   ```bash
+   python -m uvicorn app:app --reload --port 8080
+   ```
+   Open **http://127.0.0.1:8080** in your browser.
+4. *(Optional)* Deploy [`sample-app.yaml`](./sample-app.yaml) into a sandbox/Kind/Minikube cluster to watch healthy workloads alongside intentional Step 9 (`Pending`), Step 10 (`ImagePullBackOff` / `CrashLoopBackOff`), Step 11 (`0/1 Ready`), and Step 12 (orphaned Service) stalls light up the **12-Step Machine**.
+
+### Option B: Zero-Keys Docker Compose
+```powershell
+# Windows PowerShell
+.\start-docker.ps1
+```
+```bash
+# Linux / macOS
+chmod +x start-docker.sh && ./start-docker.sh
+# Or directly:
+docker compose up -d --build
+```
+Verify status: `curl http://localhost:8080/api/status`.
+
+---
+
+## 🔒 Security Architecture
+
+- **Strictly Read-Only Default (`KUBEORBIT_READ_ONLY=true`)**: Cluster mutation routes (including workload rollback and AI HITL rollback proposals) return `403` / disabled unless an operator explicitly opts in with `KUBEORBIT_READ_ONLY=false`.
+- **Zero Kubernetes Secret Value Exposure**:
+  - No secret decode / reveal route exists.
+  - `GET /api/clusters/{id}/manifest` and `kube_client.get_resource_yaml()` reject `Secret`, `secrets`, `secrets.v1`, and `v1/Secret` with `403 Forbidden` / `PermissionError`.
+  - Namespace resource tables, Resource Map, and AG-UI cards expose Secret **metadata only** (name, type, key names).
+  - Helm release details and diffs mask all secret data and credential-like values **server-side** before returning JSON.
+- **Portal Auth & Zero-Trust 3-Tier RBAC (`auth.py`)**: Supports `none` (local dev), `api_key` (`X-API-Key` constant-time check), `iap` (GCP Identity-Aware Proxy + cryptographic `X-Goog-IAP-JWT-Assertion` verification), and `azure_ad` (Easy Auth), with dynamic GCP Project Custom IAM Role resolution (`kubeorbitAdmin`, `kubeorbitOperator`, `kubeorbitViewer`, including versioned suffixes like `_v2`) and `KUBEORBIT_STRICT_RBAC=true` zero-trust lockout.
+- **Hardening**: Strict regex validation on every path/query segment, subprocess flag-injection guards, local kubeconfig path/symlink traversal checks, `KUBEORBIT_DISABLE_LOCAL_PROVIDER=true` auto-enabled on Cloud Run/IAP, security response headers (`X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`), and non-root container user (`kubeorbit`, UID `10001`).
+
+---
+
+## ⚙️ Configuration Reference
+
+### Environment Variables
+
+| Category | Variable | Default | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Security** | `KUBEORBIT_READ_ONLY` | `true` | Enforce strictly read-only cluster mode (blocks workload rollback writes) |
+| **Core** | `KUBEORBIT_CONFIG_PATH` | `config/clusters.yaml` | Path to cluster YAML registry |
+| **Core** | `KUBEORBIT_KUBECONFIG_HOME` | `~/.kubeorbit/kubeconfigs` | Isolated per-cluster kubeconfig directory |
+| **Core** | `KUBEORBIT_DISABLE_LOCAL_PROVIDER` | Auto (`true` on Cloud Run / `iap`) | Disable `local` provider & server kubeconfig parsing |
+| **Core** | `KUBEORBIT_CORS_ORIGINS` | `http://localhost:8000,http://localhost:8080` | Allowed CORS origin(s) |
+| **Config Store** | `USE_GCP_SECRET_MANAGER` | `false` | Sync `clusters.yaml` from GCP Secret Manager (non-blocking background refresh) |
+| **Config Store** | `GCP_PROJECT_ID` / `GCP_SECRET_NAME` | unset / `kubeorbit-clusters-yaml` | Secret Manager project and secret name for `clusters.yaml` |
+| **Config Store** | `KUBEORBIT_SECRET_SYNC_TTL_SEC` | `120` | Background Secret Manager config refresh interval (seconds) |
+| **Auth / RBAC** | `KUBEORBIT_AUTH_MODE` | `none` | Portal auth: `none` \| `api_key` \| `iap` \| `azure_ad` |
+| **Auth / RBAC** | `KUBEORBIT_API_KEY` | unset | Shared secret for `api_key` mode (`X-API-Key`) |
+| **Auth / RBAC** | `KUBEORBIT_IAP_AUDIENCE` | unset | Expected IAP JWT audience for cryptographic assertion verification |
+| **Auth / RBAC** | `KUBEORBIT_GCP_IAM_RBAC` | `false` | Resolve roles dynamically from `kubeorbitAdmin/Operator/Viewer` IAM bindings |
+| **Auth / RBAC** | `KUBEORBIT_STRICT_RBAC` | `false` | Deny (`403`) any authenticated user without an explicit role |
+| **AI / ADK** | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` (when no `GOOGLE_API_KEY`) | Route Google ADK to Vertex AI (zero API keys) |
+| **AI / ADK** | `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | `adk-enterprise-observability` / `global` | Vertex AI project & location |
+| **AI / ADK** | `KUBEORBIT_AI_MODEL` | `gemini-3.5-flash` | Gemini model ID used by ADK |
+| **MCP Server** | `KUBEORBIT_BASE_URL` / `KUBEORBIT_MCP_TRANSPORT` | `http://localhost:8080` / `stdio` | Standalone FastMCP target URL & transport (`stdio` \| `streamable-http`) |
+
+---
+
+## 🏢 Enterprise Production Deployment (Terraform + Multi-Cloud)
+
+Complete modular Terraform configurations live in [`terraform/`](./terraform/README.md):
+- [`terraform/cloud-run/`](./terraform/cloud-run/README.md) — Artifact Registry, VPC + Cloud NAT static egress IP, Secret Manager, `kubeorbit-runner` SA, Cloud Run v2 behind IAP (`min_instance_count=1`, `max_instance_count=1`), and Custom IAM Roles.
+- [`terraform/gke/`](./terraform/gke/README.md) — VPC/Subnet, GKE cluster, `kubeorbit-gke-reader` SA impersonation, and read-only K8s ClusterRole/Binding.
+- [`terraform/eks/`](./terraform/eks/README.md) — EKS cluster + OIDC Web Identity role trusting GCP `kubeorbit-runner`.
+- [`terraform/aks/`](./terraform/aks/README.md) — AKS cluster + Entra Federated Identity Credential trusting GCP `kubeorbit-runner`.
+
+```bash
+# Build & deploy immutable digest to Cloud Run
+gcloud builds submit --project=<gcp-project-id> \
+  --tag us-central1-docker.pkg.dev/<gcp-project-id>/kubeorbit-repo/kubeorbit:latest .
+
+gcloud run services update kubeorbit --region=us-central1 --project=<gcp-project-id> \
+  --image=us-central1-docker.pkg.dev/<gcp-project-id>/kubeorbit-repo/kubeorbit@<digest> \
+  --max-instances=1
+```
+
+---
+
+## 🧪 Automated Testing & Verification
+
+```bash
+# Run full Python test suite (115+ tests covering security, read-only guards, Helm masking, 12-Step RCA, AG-UI, MCP, concurrency)
+.venv/bin/pytest -q          # Windows: .venv\Scripts\python.exe -m pytest -q
+
+# Check ES-module JavaScript syntax
+node --check static/api.js
+node --check static/components.js
+node --check static/app.js
+node --check static/helm.js
+node --check static/resourcemap.js
+node --check static/agui.js
+node --check static/agui_views.js
+```
+
+---
+
+## 🤝 Enterprise Private VPC Rollout & Advisory
+
+Want **KubeOrbit** deployed privately inside your GCP, AWS, or Azure VPC behind corporate SSO/IAP with zero-key multi-cloud WIF and team onboarding?
+- Open a GitHub Discussion / Issue on [`naveen-engg/kubeorbit-portal`](https://github.com/naveen-engg/kubeorbit-portal), or reach out directly via LinkedIn / GitHub profile for fixed-scope private enterprise setup sprints, architecture reviews, or platform engineering engagements.
 
 ---
 
 ## 📄 License
-Internal / Proprietary — Platform Engineering Team.
+
+Licensed under the **Apache License, Version 2.0** — see [`LICENSE`](./LICENSE) for full terms. Free for personal, team, and commercial self-hosted use.
