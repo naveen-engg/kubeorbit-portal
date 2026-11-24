@@ -3915,11 +3915,13 @@ function getActivePortalState() {
   };
   const selectId = nsMap[state.activeView];
   const nsEl = selectId ? $(selectId) : null;
+  const providerVal = $("ai-provider-select")?.value || "vertex_ai";
   return {
     clusterId: state.selectedClusterId || "",
     activeView: state.activeView || "overview",
     namespace: nsEl ? nsEl.value || "" : "",
     selectedStep: selectedStepNumber || null,
+    aiProvider: providerVal,
     userRole: state.userRole || "viewer",
     userSubject: state.userSubject || "anonymous",
   };
@@ -4721,6 +4723,27 @@ async function sendAIChatMessage(overridePrompt = null) {
 function initAIChatPanel() {
   const savedWidth = localStorage.getItem(AI_PANEL_WIDTH_KEY);
   setAIPanelWidth(savedWidth ? Number(savedWidth) : AI_PANEL_DEFAULT_WIDTH, { persist: false });
+
+  const providerSelect = $("ai-provider-select");
+  const providerNotice = $("ai-provider-placeholder-note");
+  const syncProviderNotice = () => {
+    if (!providerSelect || !providerNotice) return;
+    const val = providerSelect.value;
+    if (val === "claude") {
+      providerNotice.innerHTML =
+        "<strong>Anthropic Claude (Placeholder):</strong> Wired via Google ADK LiteLLM bridge. Install <code>litellm</code> and set <code>KUBEORBIT_AI_PROVIDER=claude</code> + <code>ANTHROPIC_API_KEY</code> to activate.";
+      providerNotice.hidden = false;
+    } else if (val === "openai") {
+      providerNotice.innerHTML =
+        "<strong>OpenAI (Placeholder):</strong> Wired via Google ADK LiteLLM bridge. Install <code>litellm</code> and set <code>KUBEORBIT_AI_PROVIDER=openai</code> + <code>OPENAI_API_KEY</code> to activate.";
+      providerNotice.hidden = false;
+    } else {
+      providerNotice.hidden = true;
+      providerNotice.textContent = "";
+    }
+  };
+  providerSelect?.addEventListener("change", syncProviderNotice);
+  syncProviderNotice();
 
   $("ai-chat-fab")?.addEventListener("click", toggleAIChatPanel);
   $("ai-chat-close")?.addEventListener("click", closeAIChatPanel);

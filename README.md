@@ -11,6 +11,21 @@
 
 ---
 
+## 🎬 Live Interactive Walkthrough
+
+<p align="center">
+  <a href="./docs/images/kubeorbit_live_demo.mp4" title="Watch the full 2m 41s live KubeOrbit walkthrough (MP4)">
+    <img src="./docs/images/kubeorbit_live_demo.gif" alt="KubeOrbit Live Interactive Walkthrough — Cluster Map, Resource Map (kubeorbit-demo & helm-demo), Masked Helm Diff, 12-Step Machine & Ask AI Live UI Sync" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="./docs/images/kubeorbit_live_demo.mp4"><strong>▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)</strong></a><br/>
+  <sub>Live GKE recording: Cluster Map · Nodes · Namespaces (<code>kubeorbit-demo</code> &amp; <code>helm-demo</code>) · Metadata-Only Secrets · Resource, Network &amp; Storage Maps · Secret-Masked Helm Diff · Animated 12-Step Machine · Sliding Ask AI with Bidirectional Live UI Sync · Cost Optimization</sub>
+</p>
+
+---
+
 ## 🧭 Why KubeOrbit?
 
 Most Kubernetes tools (Lens, K9s, Headlamp, Rancher) assume desktop `~/.kube/config` sprawl and write/exec permissions — which is exactly why SecOps teams ban developers from connecting them to production clusters.
@@ -45,38 +60,66 @@ Most Kubernetes tools (Lens, K9s, Headlamp, Rancher) assume desktop `~/.kube/con
 
 ```mermaid
 flowchart LR
-    UI["KubeOrbit Portal UI\napp.js · helm.js · agui.js · agui_views.js\ntopology.js · resourcemap.js · SWR Cache"]
+    UI["KubeOrbit Portal UI<br/>app.js · helm.js · agui.js · agui_views.js<br/>topology.js · resourcemap.js · SWR Cache"]
 
     subgraph Backend["FastAPI Engine (app.py)"]
-        API["REST + SSEAwareGZip + Auth Middleware\nauth.py · config.py (Async Secret Manager Sync)"]
-        AGUI["AG-UI v1.0 SSE Endpoint\n/api/clusters/{id}/ai/ag-ui"]
-        RCA["12-Step RCA · Helm Diff · SDK Pool\nkube_client/"]
+        API["REST + SSEAwareGZip + Auth Middleware<br/>auth.py · config.py (Async Secret Manager Sync)"]
+        AGUI["AG-UI v1.0 SSE Endpoint<br/>/api/clusters/{id}/ai/ag-ui"]
+        RCA["12-Step RCA · Helm Diff · SDK Pool<br/>kube_client/"]
     end
 
     subgraph AgentStack["Google ADK + MCP (ai_agent.py · mcp_server/)"]
-        ADK["LlmAgent (Vertex AI Gemini)\nStreamingMode.SSE · LRU Sessions"]
-        MCP["27 Read-Only MCP Tools\nmcp_server/tools.py (HTTP GET only)"]
-        UITools["6 Interactive Portal UI Tools\nnavigate · filter · inspect · logs · yaml*"]
+        ADK["Google ADK LlmAgent<br/>StreamingMode.SSE · LRU Sessions"]
+        MCP["27 Read-Only MCP Tools<br/>mcp_server/tools.py (HTTP GET only)"]
+        UITools["6 Interactive Portal UI Tools<br/>navigate · filter · inspect · logs · yaml*"]
+    end
+
+    subgraph LLMProviders["Pluggable LLM Layer (KUBEORBIT_AI_PROVIDER)"]
+        GEMINI["Google Gemini (Vertex AI / AI Studio)<br/>Active Default · gemini-3.5-flash"]
+        CLAUDE["Anthropic Claude (Placeholder)<br/>LiteLLM Bridge · ANTHROPIC_API_KEY"]
+        OPENAI["OpenAI GPT (Placeholder)<br/>LiteLLM Bridge · OPENAI_API_KEY"]
     end
 
     subgraph Adapters["Zero-Key Cluster Adapters (providers/)"]
-        GKE["GCP GKE\nSA Impersonation / ADC"]
-        EKS["AWS EKS\nOIDC WIF -> STS AssumeRole"]
-        AKS["Azure AKS\nEntra Federated ID + kubelogin"]
-        LOCAL["Local Kubernetes\n~/.kube/config (disabled on Cloud Run)"]
+        GKE["GCP GKE<br/>SA Impersonation / ADC"]
+        EKS["AWS EKS<br/>OIDC WIF -> STS AssumeRole"]
+        AKS["Azure AKS<br/>Entra Federated ID + kubelogin"]
+        LOCAL["Local Kubernetes<br/>~/.kube/config (disabled on Cloud Run)"]
     end
 
     UI <-->|"REST JSON (GZip + SWR)"| API
-    UI <-->|"AG-UI v1.0 SSE\nSTATE_SNAPSHOT · TOOL_CALL_* · CUSTOM"| AGUI
+    UI <-->|"AG-UI v1.0 SSE<br/>STATE_SNAPSHOT · TOOL_CALL_* · CUSTOM"| AGUI
     API --> RCA
     AGUI --> ADK
+    ADK --> GEMINI
+    ADK -.->|"Placeholder"| CLAUDE
+    ADK -.->|"Placeholder"| OPENAI
     ADK -->|"In-process IAP identity propagation"| MCP
     MCP -->|"HTTP GET /api/..."| API
     ADK -->|"CUSTOM: ui_action"| AGUI
     RCA --> Adapters
+
+    classDef ui fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
+    classDef backend fill:#EEF2FF,stroke:#4F46E5,stroke-width:2px,color:#1E1B4B
+    classDef agent fill:#F3E8FF,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef llmActive fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef llmPlaceholder fill:#FEF3C7,stroke:#D97706,stroke-width:2px,stroke-dasharray:6 4,color:#78350F
+    classDef adapter fill:#CCFBF1,stroke:#0D9488,stroke-width:2px,color:#134E4A
+
+    class UI ui
+    class API,AGUI,RCA backend
+    class ADK,MCP,UITools agent
+    class GEMINI llmActive
+    class CLAUDE,OPENAI llmPlaceholder
+    class GKE,EKS,AKS,LOCAL adapter
+
+    style Backend fill:#F8FAFC,stroke:#6366F1,stroke-width:1.5px,color:#1E1B4B
+    style AgentStack fill:#FAF5FF,stroke:#9333EA,stroke-width:1.5px,color:#3B0764
+    style LLMProviders fill:#F0FDF4,stroke:#22C55E,stroke-width:1.5px,color:#14532D
+    style Adapters fill:#F0FDFA,stroke:#14B8A6,stroke-width:1.5px,color:#134E4A
 ```
 
-*\*`ui_open_manifest` and `GET /manifest` enforce a hard block (`403` / `ok=False`) on `Secret` objects.*
+*\*`ui_open_manifest` and `GET /manifest` enforce a hard block (`403` / `ok=False`) on `Secret` objects. Dashed LLM nodes (`Anthropic Claude` and `OpenAI`) are pluggable placeholder adapters wired via Google ADK's LiteLLM bridge.*
 
 ---
 
@@ -91,7 +134,7 @@ Built in [`kube_client/helm.py`](./kube_client/helm.py) and [`static/helm.js`](.
 
 ## 🤖 Interactive AI Stack (AG-UI ↔ Google ADK ↔ MCP)
 
-KubeOrbit implements the **AG-UI (Agent-to-UI) Protocol v1.0** natively over Server-Sent Events (`POST /api/clusters/{cluster_id}/ai/ag-ui`) backed by **Google ADK (`google-adk`)** on **Vertex AI Gemini** (`gemini-3.5-flash` by default; zero static API keys via ADC or attached Cloud Run Service Account):
+KubeOrbit implements the **AG-UI (Agent-to-UI) Protocol v1.0** natively over Server-Sent Events (`POST /api/clusters/{cluster_id}/ai/ag-ui`) backed by **Google ADK (`google-adk`)** with pluggable LLM providers — **Vertex AI Gemini** (`gemini-3.5-flash`, active default with zero static API keys via ADC or attached Cloud Run Service Account), plus **Anthropic Claude** and **OpenAI** placeholder adapters wired via Google ADK's LiteLLM bridge (`KUBEORBIT_AI_PROVIDER=claude|openai`):
 
 - **Docked Sliding Split-Pane Drawer**: Smoothly docks alongside the active view (`#ai-chat-panel`) with a draggable column resizer (`320px–760px`, persisted in `localStorage`) and automatic SVG reflow so topologies and 12-Step diagrams stay visible side-by-side.
 - **Context-Aware Quick Prompts**: Dynamically adapts to the active portal view and selected namespace.
@@ -244,9 +287,11 @@ Verify status: `curl http://localhost:8080/api/status`.
 | **Auth / RBAC** | `KUBEORBIT_IAP_AUDIENCE` | unset | Expected IAP JWT audience for cryptographic assertion verification |
 | **Auth / RBAC** | `KUBEORBIT_GCP_IAM_RBAC` | `false` | Resolve roles dynamically from `kubeorbitAdmin/Operator/Viewer` IAM bindings |
 | **Auth / RBAC** | `KUBEORBIT_STRICT_RBAC` | `false` | Deny (`403`) any authenticated user without an explicit role |
+| **AI / ADK** | `KUBEORBIT_AI_PROVIDER` | `vertex_ai` | LLM provider: `vertex_ai` (active) \| `gemini` (active) \| `claude` *(placeholder)* \| `openai` *(placeholder)* |
 | **AI / ADK** | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` (when no `GOOGLE_API_KEY`) | Route Google ADK to Vertex AI (zero API keys) |
 | **AI / ADK** | `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | `adk-enterprise-observability` / `global` | Vertex AI project & location |
-| **AI / ADK** | `KUBEORBIT_AI_MODEL` | `gemini-3.5-flash` | Gemini model ID used by ADK |
+| **AI / ADK** | `KUBEORBIT_AI_MODEL` | `gemini-3.5-flash` | Model ID (`gemini-3.5-flash`, or placeholder `anthropic/claude-sonnet-4-20250514` / `openai/gpt-4o`) |
+| **AI / ADK** | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | unset *(placeholder)* | Placeholder API keys for Claude / OpenAI via Google ADK LiteLLM bridge (`pip install litellm`) |
 | **MCP Server** | `KUBEORBIT_BASE_URL` / `KUBEORBIT_MCP_TRANSPORT` | `http://localhost:8080` / `stdio` | Standalone FastMCP target URL & transport (`stdio` \| `streamable-http`) |
 
 ---

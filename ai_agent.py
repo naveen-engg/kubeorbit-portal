@@ -1,33 +1,113 @@
-"""In-app "Diagnose with AI" and "Ask AI" agent powered by Google ADK & Vertex AI Gemini.
+"""In-app "Diagnose with AI" and "Ask AI" agent powered by Google ADK with pluggable LLM providers.
 
 Reuses `mcp_server/tools.py`'s read-only async functions directly as Google ADK
 (`google-adk`) tools in the same process as the FastAPI app.
 
-Authentication & Model Configuration (GCP Vertex AI first):
-  1. Vertex AI (Recommended for GCP / Cloud Run & Local Dev with gcloud ADC):
+Authentication & Model Configuration:
+  1. Vertex AI Gemini (Active — Recommended for GCP / Cloud Run & Local Dev with gcloud ADC):
+       KUBEORBIT_AI_PROVIDER=vertex_ai
        GOOGLE_GENAI_USE_VERTEXAI=TRUE
        GOOGLE_CLOUD_PROJECT=adk-enterprise-observability
-       GOOGLE_CLOUD_LOCATION=us-central1
-       KUBEORBIT_AI_MODEL=gemini-2.5-flash
+       GOOGLE_CLOUD_LOCATION=global
+       KUBEORBIT_AI_MODEL=gemini-3.5-flash
      Uses Application Default Credentials (`gcloud auth application-default login`
      locally, or the attached `kubeorbit-runner` Service Account with
      `roles/aiplatform.user` on Cloud Run) -- zero API keys required.
 
-  2. Gemini Developer API (Optional fallback if GOOGLE_API_KEY is explicitly set):
+  2. Gemini Developer API (Active fallback if GOOGLE_API_KEY is explicitly set):
+       KUBEORBIT_AI_PROVIDER=gemini
        GOOGLE_GENAI_USE_VERTEXAI=FALSE
        GOOGLE_API_KEY=<gemini-api-key>
-       KUBEORBIT_AI_MODEL=gemini-2.5-flash
+       KUBEORBIT_AI_MODEL=gemini-3.5-flash
+
+  3. Anthropic Claude (Placeholder — via Google ADK LiteLLM adapter):
+       KUBEORBIT_AI_PROVIDER=claude
+       ANTHROPIC_API_KEY=<anthropic-api-key>
+       KUBEORBIT_AI_MODEL=anthropic/claude-sonnet-4-20250514
+     Requires `pip install litellm` + `ANTHROPIC_API_KEY`.
+
+  4. OpenAI (Placeholder — via Google ADK LiteLLM adapter):
+       KUBEORBIT_AI_PROVIDER=openai
+       OPENAI_API_KEY=<openai-api-key>
+       KUBEORBIT_AI_MODEL=openai/gpt-4o
+     Requires `pip install litellm` + `OPENAI_API_KEY`.
 """
 from collections import OrderedDict
 import logging
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("kubeorbit.ai")
 
 DEFAULT_GCP_PROJECT = "adk-enterprise-observability"
 DEFAULT_GCP_LOCATION = "global"
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_CLAUDE_MODEL = "anthropic/claude-sonnet-4-20250514"
+DEFAULT_OPENAI_MODEL = "openai/gpt-4o"
+
+_PROVIDER_ALIASES = {
+    "": "vertex_ai",
+    "vertex": "vertex_ai",
+    "vertex_ai": "vertex_ai",
+    "vertexai": "vertex_ai",
+    "google": "vertex_ai",
+    "gemini": "gemini",
+    "gemini_api_key": "gemini",
+    "claude": "claude",
+    "anthropic": "claude",
+    "openai": "openai",
+    "gpt": "openai",
+}
+
+
+def get_supported_ai_providers() -> List[Dict[str, Any]]:
+    """Return active and placeholder LLM provider metadata for status & Ask AI UI."""
+    return [
+        {
+            "id": "vertex_ai",
+            "label": "Google Vertex AI (Gemini)",
+            "status": "active",
+            "placeholder": False,
+            "default_model": DEFAULT_GEMINI_MODEL,
+            "env_vars": ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "KUBEORBIT_AI_MODEL"],
+        },
+        {
+            "id": "gemini",
+            "label": "Google AI Studio (Gemini)",
+            "status": "active",
+            "placeholder": False,
+            "default_model": DEFAULT_GEMINI_MODEL,
+            "env_vars": ["GOOGLE_API_KEY", "KUBEORBIT_AI_MODEL"],
+        },
+        {
+            "id": "claude",
+            "label": "Anthropic Claude",
+            "status": "placeholder",
+            "placeholder": True,
+            "default_model": DEFAULT_CLAUDE_MODEL,
+            "env_vars": ["KUBEORBIT_AI_PROVIDER=claude", "ANTHROPIC_API_KEY", "KUBEORBIT_AI_MODEL"],
+            "note": "Placeholder via Google ADK LiteLLM bridge — install `litellm` and set ANTHROPIC_API_KEY to activate.",
+        },
+        {
+            "id": "openai",
+            "label": "OpenAI",
+            "status": "placeholder",
+            "placeholder": True,
+            "default_model": DEFAULT_OPENAI_MODEL,
+            "env_vars": ["KUBEORBIT_AI_PROVIDER=openai", "OPENAI_API_KEY", "KUBEORBIT_AI_MODEL"],
+            "note": "Placeholder via Google ADK LiteLLM bridge — install `litellm` and set OPENAI_API_KEY to activate.",
+        },
+    ]
+
+
+def _litellm_available() -> bool:
+    try:
+        import litellm  # noqa: F401
+        from google.adk.models.lite_llm import LiteLlm  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 
 _AGENT = None  # built lazily so importing this module never requires ADK/credentials to be ready
 _RUNNER = None  # one shared InMemoryRunner -- its session_service is what makes chat() multi-turn
@@ -36,14 +116,86 @@ _MAX_ACTIVE_SESSIONS = 200
 _ACTIVE_SESSION_KEYS: "OrderedDict[Tuple[str, str], bool]" = OrderedDict()
 
 
-def ensure_vertex_ai_env() -> Dict[str, Any]:
-    """Ensure Google GenAI / ADK environment variables are configured for
-    Vertex AI in the user's GCP project unless GOOGLE_API_KEY is explicitly used."""
+def ensure_vertex_ai_env(provider_override: Optional[str] = None) -> Dict[str, Any]:
+    """Resolve active LLM provider config for Google ADK.
+
+    Defaults to Google Vertex AI (Gemini) unless GOOGLE_API_KEY is explicitly used or
+    `KUBEORBIT_AI_PROVIDER` selects a pluggable provider (`claude` / `openai` placeholders).
+    """
+    raw_provider = (
+        provider_override if provider_override is not None else os.environ.get("KUBEORBIT_AI_PROVIDER", "")
+    ).strip().lower()
+    provider = _PROVIDER_ALIASES.get(raw_provider, "vertex_ai")
+    providers_catalog = get_supported_ai_providers()
+
+    # Placeholder external LLM providers (Anthropic Claude & OpenAI via ADK LiteLLM bridge)
+    if provider == "claude":
+        api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+        raw_model = (os.environ.get("KUBEORBIT_AI_MODEL") or "").strip()
+        model_name = (
+            raw_model if raw_model and raw_model != DEFAULT_GEMINI_MODEL else DEFAULT_CLAUDE_MODEL
+        )
+        if not model_name.startswith("anthropic/"):
+            model_name = f"anthropic/{model_name}"
+        ready = bool(api_key) and _litellm_available()
+        return {
+            "enabled": True,
+            "configured": ready,
+            "provider": "claude",
+            "backend": "anthropic_claude" if ready else "anthropic_placeholder",
+            "status": "active" if ready else "placeholder",
+            "placeholder": not ready,
+            "model": model_name,
+            "project": None,
+            "location": None,
+            "providers": providers_catalog,
+            "error": (
+                None
+                if ready
+                else (
+                    f"Anthropic Claude ({model_name}) is currently wired as a placeholder provider. "
+                    "Install `litellm` and set KUBEORBIT_AI_PROVIDER=claude + ANTHROPIC_API_KEY to activate, "
+                    "or switch back to Google Vertex AI (Gemini) for live cluster diagnostics."
+                )
+            ),
+        }
+
+    if provider == "openai":
+        api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+        raw_model = (os.environ.get("KUBEORBIT_AI_MODEL") or "").strip()
+        model_name = (
+            raw_model if raw_model and raw_model != DEFAULT_GEMINI_MODEL else DEFAULT_OPENAI_MODEL
+        )
+        if not model_name.startswith("openai/"):
+            model_name = f"openai/{model_name}"
+        ready = bool(api_key) and _litellm_available()
+        return {
+            "enabled": True,
+            "configured": ready,
+            "provider": "openai",
+            "backend": "openai" if ready else "openai_placeholder",
+            "status": "active" if ready else "placeholder",
+            "placeholder": not ready,
+            "model": model_name,
+            "project": None,
+            "location": None,
+            "providers": providers_catalog,
+            "error": (
+                None
+                if ready
+                else (
+                    f"OpenAI ({model_name}) is currently wired as a placeholder provider. "
+                    "Install `litellm` and set KUBEORBIT_AI_PROVIDER=openai + OPENAI_API_KEY to activate, "
+                    "or switch back to Google Vertex AI (Gemini) for live cluster diagnostics."
+                )
+            ),
+        }
+
     api_key = (os.environ.get("GOOGLE_API_KEY") or "").strip()
     use_vertex_raw = (os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") or "").strip().upper()
 
     # Default to Vertex AI when no GOOGLE_API_KEY is provided or when explicitly enabled
-    if use_vertex_raw in ("TRUE", "1", "YES") or not api_key:
+    if provider != "gemini" and (use_vertex_raw in ("TRUE", "1", "YES") or not api_key):
         os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
         project = (
             os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -58,11 +210,13 @@ def ensure_vertex_ai_env() -> Dict[str, Any]:
         os.environ["GOOGLE_CLOUD_PROJECT"] = project
         os.environ["GOOGLE_CLOUD_LOCATION"] = location
         backend = "vertex_ai"
+        resolved_provider = "vertex_ai"
     else:
         os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
         project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
         location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "").strip()
         backend = "gemini_api_key"
+        resolved_provider = "gemini"
 
     model_name = (os.environ.get("KUBEORBIT_AI_MODEL") or DEFAULT_GEMINI_MODEL).strip()
     os.environ["KUBEORBIT_AI_MODEL"] = model_name
@@ -70,11 +224,18 @@ def ensure_vertex_ai_env() -> Dict[str, Any]:
     return {
         "enabled": True,
         "configured": True,
+        "provider": resolved_provider,
         "backend": backend,
+        "status": "active",
+        "placeholder": False,
         "model": model_name,
         "project": project if backend == "vertex_ai" else None,
         "location": location if backend == "vertex_ai" else None,
+        "providers": providers_catalog,
     }
+
+
+resolve_ai_provider_config = ensure_vertex_ai_env
 
 
 import inspect as _inspect
@@ -326,17 +487,29 @@ _FRONTEND_UI_TOOLS = (
 )
 
 
+def _resolve_adk_model(cfg: Dict[str, Any]):
+    """Return the native Gemini model string or a LiteLLM model adapter for Claude/OpenAI."""
+    if cfg.get("provider") in ("claude", "openai"):
+        if not cfg.get("configured"):
+            raise RuntimeError(cfg.get("error") or f"Provider '{cfg.get('provider')}' is a placeholder.")
+        from google.adk.models.lite_llm import LiteLlm
+
+        return LiteLlm(model=cfg["model"])
+    return cfg["model"]
+
+
 def _build_agent():
     from google.adk.agents import LlmAgent
     from mcp_server.server import _TOOL_FUNCTIONS
 
     cfg = ensure_vertex_ai_env()
+    adk_model = _resolve_adk_model(cfg)
     logger.info(
-        "Initializing KubeOrbit Google ADK Agent: model=%s backend=%s project=%s location=%s",
-        cfg["model"], cfg["backend"], cfg["project"], cfg["location"],
+        "Initializing KubeOrbit Google ADK Agent: provider=%s model=%s backend=%s project=%s location=%s",
+        cfg.get("provider"), cfg["model"], cfg["backend"], cfg["project"], cfg["location"],
     )
     return LlmAgent(
-        model=cfg["model"],
+        model=adk_model,
         name="kubeorbit_diagnostic_agent",
         instruction=(
             "You are an expert Kubernetes SRE & Cloud Architect assistant embedded in KubeOrbit, "
@@ -457,6 +630,15 @@ async def _get_or_create_session(session_id: Optional[str] = None, user_id: str 
 async def _run_turn(prompt: str, session, user_id: str = "portal") -> Dict[str, Any]:
     """Sends one prompt to `session` and collects the agent's text reply.
     Returns {"answer": str} on success or {"error": str} on any failure."""
+    cfg = ensure_vertex_ai_env()
+    if not cfg.get("configured", cfg.get("enabled", False)):
+        return {
+            "error": cfg.get("error") or "AI agent provider is not configured.",
+            "provider": cfg.get("provider"),
+            "backend": cfg.get("backend"),
+            "model": cfg.get("model"),
+        }
+
     try:
         from google.genai import types
     except ImportError:
@@ -625,7 +807,17 @@ async def stream_ag_ui_run(
     from mcp_server.client import reset_inprocess_user, set_inprocess_user
     from mcp_server.server import _TOOL_FUNCTIONS
 
-    cfg = ensure_vertex_ai_env()
+    provider_override = (
+        (req.forwarded_props or {}).get("provider")
+        or (req.state or {}).get("aiProvider")
+        or None
+    )
+    # Keep 0-arg call when no UI override is specified so unit tests that monkeypatch
+    # ensure_vertex_ai_env with a 0-arg lambda continue to work cleanly.
+    if provider_override and str(provider_override).strip().lower() not in ("", "vertex_ai", "default"):
+        cfg = ensure_vertex_ai_env(provider_override=str(provider_override))
+    else:
+        cfg = ensure_vertex_ai_env()
     run_id = req.run_id or f"run-{_uuid.uuid4().hex[:12]}"
 
     if not cfg.get("configured", cfg.get("enabled", False)):
@@ -637,7 +829,7 @@ async def stream_ag_ui_run(
         yield encode_ag_ui_event(
             "RUN_ERROR",
             message=cfg.get("error") or "AI agent is not configured.",
-            code="AI_NOT_CONFIGURED",
+            code="AI_PROVIDER_PLACEHOLDER" if cfg.get("placeholder") else "AI_NOT_CONFIGURED",
         )
         return
 

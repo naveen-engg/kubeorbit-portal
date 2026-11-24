@@ -474,6 +474,8 @@ class TestAGUIHTTPEndpointsAndRBAC:
     def test_portal_quick_prompts_are_generalized_without_hardcoded_demo_names(self):
         from pathlib import Path
 
+        from pathlib import Path
+
         root = Path(__file__).resolve().parent.parent
         html = (root / "static" / "index.html").read_text(encoding="utf-8")
         app_js = (root / "static" / "app.js").read_text(encoding="utf-8")
@@ -497,6 +499,8 @@ class TestAGUIHTTPEndpointsAndRBAC:
         assert "Helm Releases" in fn_body
 
     def test_interactive_mcp_tool_renderer_module_wiring(self):
+        from pathlib import Path
+
         from pathlib import Path
 
         root = Path(__file__).resolve().parent.parent
@@ -532,3 +536,47 @@ class TestAGUIHTTPEndpointsAndRBAC:
         assert allowed["ok"] is True
         assert allowed["action"] == "open_manifest"
         assert allowed["kind"] == "ConfigMap"
+
+    @pytest.mark.asyncio
+    async def test_claude_and_openai_placeholder_providers(self, monkeypatch: pytest.MonkeyPatch):
+        import ai_agent
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("KUBEORBIT_AI_MODEL", raising=False)
+        monkeypatch.delenv("KUBEORBIT_AI_PROVIDER", raising=False)
+
+        providers = {p["id"]: p for p in ai_agent.get_supported_ai_providers()}
+        assert providers["vertex_ai"]["status"] == "active"
+        assert providers["claude"]["status"] == "placeholder"
+        assert providers["openai"]["status"] == "placeholder"
+
+        claude_cfg = ai_agent.ensure_vertex_ai_env(provider_override="claude")
+        assert claude_cfg["provider"] == "claude"
+        assert claude_cfg["placeholder"] is True
+        assert claude_cfg["configured"] is False
+        assert claude_cfg["model"].startswith("anthropic/")
+
+        openai_cfg = ai_agent.ensure_vertex_ai_env(provider_override="openai")
+        assert openai_cfg["provider"] == "openai"
+        assert openai_cfg["placeholder"] is True
+        assert openai_cfg["configured"] is False
+        assert openai_cfg["model"].startswith("openai/")
+
+        # AG-UI stream gracefully returns AI_PROVIDER_PLACEHOLDER when UI selects claude/openai
+        for prov in ("claude", "openai"):
+            req = ai_agent.RunAgentInput(
+                messages=[{"role": "user", "content": "check pods"}],
+                state={"aiProvider": prov},
+            )
+            events = _parse_sse_events("".join([c async for c in ai_agent.stream_ag_ui_run("obs-sbx", req)]))
+            assert events[-1]["type"] == "RUN_ERROR"
+            assert events[-1]["code"] == "AI_PROVIDER_PLACEHOLDER"
+
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        index_html = (root / "static" / "index.html").read_text(encoding="utf-8")
+        assert 'id="ai-provider-select"' in index_html
+        assert 'value="claude"' in index_html
+        assert 'value="openai"' in index_html
