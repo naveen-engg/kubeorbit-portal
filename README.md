@@ -6,6 +6,7 @@
 [![MCP: 27 Read-Only Tools](https://img.shields.io/badge/MCP-27_Read--Only_Tools-6366F1.svg)](#-interactive-ai-stack-ag-ui--google-adk--mcp)
 [![Protocol: AG-UI v1.0](https://img.shields.io/badge/Protocol-AG--UI_v1.0_SSE-0EA5E9.svg)](#-interactive-ai-stack-ag-ui--google-adk--mcp)
 [![Read on Medium](https://img.shields.io/badge/Medium-Architecture_%26_Deep_Dive-000000.svg?logo=medium)](https://medium.com/@r.naveen.reddy.099/why-security-teams-keep-banning-lens-and-k9s-in-prod-so-i-built-a-read-only-k8s-portal-b257082c4566)
+[![KubeOrbit MCP server – Glama Score](https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal/badges/score.svg)](https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal)
 
 > **Strictly Read-Only Multi-Cloud Kubernetes Diagnostics Portal, 12-Step `kubectl apply` Machine, Server-Side Secret-Masked Helm Diff & AG-UI ↔ Google ADK ↔ MCP Navigator**  
 > Unified web control plane across **GCP GKE**, **AWS EKS**, **Azure AKS**, and **Local Kubernetes** (Minikube / Docker Desktop / Kind) — built so developers and on-call SREs can diagnose staging & production safely with **zero write permissions**, **zero Secret exposure**, and **zero static cloud credentials**.
@@ -151,6 +152,10 @@ python -m mcp_server.server
 # Streamable HTTP transport (standalone MCP service)
 KUBEORBIT_MCP_TRANSPORT=streamable-http python -m mcp_server.server
 ```
+
+<a href="https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal/badges/card.svg" alt="KubeOrbit MCP server on Glama" />
+</a>
 
 ---
 
