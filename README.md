@@ -15,18 +15,11 @@
 
 ## 🎬 Live Interactive Walkthrough
 
-<p align="center">
-  <a href="https://github.com/naveen-engg/kubeorbit-portal/blob/main/docs/images/kubeorbit_live_demo.mp4" title="Watch the full 2m 41s live KubeOrbit walkthrough (MP4)">
-    <img src="https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_live_demo.gif" alt="KubeOrbit Live Interactive Walkthrough — Cluster Map, Resource Map (kubeorbit-demo & helm-demo), Masked Helm Diff, 12-Step Machine & Ask AI Live UI Sync" width="100%" />
-  </a>
-</p>
+[![KubeOrbit Live Interactive Walkthrough — Cluster Map, Resource Map (kubeorbit-demo & helm-demo), Masked Helm Diff, 12-Step Machine & Ask AI Live UI Sync](https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_live_demo.gif)](https://github.com/naveen-engg/kubeorbit-portal/blob/main/docs/images/kubeorbit_live_demo.mp4)
 
-<p align="center">
-  <a href="https://github.com/naveen-engg/kubeorbit-portal/blob/main/docs/images/kubeorbit_live_demo.mp4"><strong>▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)</strong></a>
-  &nbsp;·&nbsp;
-  <a href="https://medium.com/@r.naveen.reddy.099/why-security-teams-keep-banning-lens-and-k9s-in-prod-so-i-built-a-read-only-k8s-portal-b257082c4566"><strong>📖 Read the Full Architecture Write-Up on Medium</strong></a><br/>
-  <sub>Live GKE recording: Cluster Map · Nodes · Namespaces (<code>kubeorbit-demo</code> &amp; <code>helm-demo</code>) · Metadata-Only Secrets · Resource, Network &amp; Storage Maps · Secret-Masked Helm Diff · Animated 12-Step Machine · Sliding Ask AI with Bidirectional Live UI Sync · Cost Optimization</sub>
-</p>
+**[▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)](https://github.com/naveen-engg/kubeorbit-portal/blob/main/docs/images/kubeorbit_live_demo.mp4)** · **[📖 Read the Full Architecture Write-Up on Medium](https://medium.com/@r.naveen.reddy.099/why-security-teams-keep-banning-lens-and-k9s-in-prod-so-i-built-a-read-only-k8s-portal-b257082c4566)**
+
+*Live GKE recording: Cluster Map · Nodes · Namespaces (`kubeorbit-demo` & `helm-demo`) · Metadata-Only Secrets · Resource, Network & Storage Maps · Secret-Masked Helm Diff · Animated 12-Step Machine · Sliding Ask AI with Bidirectional Live UI Sync · Cost Optimization*
 
 ---
 
@@ -62,11 +55,7 @@ Most Kubernetes tools (Lens, K9s, Headlamp, Rancher) assume desktop `~/.kube/con
 
 ## 🏛️ System Architecture
 
-<p align="center">
-  <a href="https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_architecture.png" title="View full-resolution KubeOrbit System Architecture diagram">
-    <img src="https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_architecture.png" alt="KubeOrbit System Architecture — Portal UI & Sliding Ask AI Drawer, FastAPI Engine, Google ADK + 27 Read-Only MCP Tools, Pluggable LLM Layer (Gemini Active Default, Anthropic Claude & OpenAI GPT Placeholders), and Zero-Key Multi-Cloud Cluster Adapters (GKE, EKS, AKS, Local)" width="100%" />
-  </a>
-</p>
+[![KubeOrbit System Architecture — Portal UI & Sliding Ask AI Drawer, FastAPI Engine, Google ADK + 27 Read-Only MCP Tools, Pluggable LLM Layer (Gemini Active Default, Anthropic Claude & OpenAI GPT Placeholders), and Zero-Key Multi-Cloud Cluster Adapters (GKE, EKS, AKS, Local)](https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_architecture.png)](https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_architecture.png)
 
 *\*`ui_open_manifest` and `GET /manifest` enforce a hard block (`403` / `ok=False`) on `Secret` objects. Dashed LLM nodes (`Anthropic Claude` and `OpenAI GPT`) are pluggable placeholder adapters wired via Google ADK's LiteLLM bridge.*
 
@@ -98,9 +87,7 @@ python -m mcp_server.server
 KUBEORBIT_MCP_TRANSPORT=streamable-http python -m mcp_server.server
 ```
 
-<a href="https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal/badges/card.svg" alt="KubeOrbit MCP server on Glama" />
-</a>
+[![KubeOrbit MCP server on Glama](https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal/badges/card.svg)](https://glama.ai/mcp/servers/naveen-engg/kubeorbit-portal)
 
 ---
 
