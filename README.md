@@ -16,13 +16,13 @@
 ## 🎬 Live Interactive Walkthrough
 
 <p align="center">
-  <a href="./docs/images/kubeorbit_live_demo.mp4" title="Watch the full 2m 41s live KubeOrbit walkthrough (MP4)">
-    <img src="./docs/images/kubeorbit_live_demo.gif" alt="KubeOrbit Live Interactive Walkthrough — Cluster Map, Resource Map (kubeorbit-demo & helm-demo), Masked Helm Diff, 12-Step Machine & Ask AI Live UI Sync" width="100%" />
+  <a href="https://github.com/naveen-engg/kubeorbit-portal/blob/main/docs/images/kubeorbit_live_demo.mp4" title="Watch the full 2m 41s live KubeOrbit walkthrough (MP4)">
+    <img src="https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_live_demo.gif" alt="KubeOrbit Live Interactive Walkthrough — Cluster Map, Resource Map (kubeorbit-demo & helm-demo), Masked Helm Diff, 12-Step Machine & Ask AI Live UI Sync" width="100%" />
   </a>
 </p>
 
 <p align="center">
-  <a href="./docs/images/kubeorbit_live_demo.mp4"><strong>▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)</strong></a>
+  <a href="https://github.com/naveen-engg/kubeorbit-portal/blob/main/docs/images/kubeorbit_live_demo.mp4"><strong>▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)</strong></a>
   &nbsp;·&nbsp;
   <a href="https://medium.com/@r.naveen.reddy.099/why-security-teams-keep-banning-lens-and-k9s-in-prod-so-i-built-a-read-only-k8s-portal-b257082c4566"><strong>📖 Read the Full Architecture Write-Up on Medium</strong></a><br/>
   <sub>Live GKE recording: Cluster Map · Nodes · Namespaces (<code>kubeorbit-demo</code> &amp; <code>helm-demo</code>) · Metadata-Only Secrets · Resource, Network &amp; Storage Maps · Secret-Masked Helm Diff · Animated 12-Step Machine · Sliding Ask AI with Bidirectional Live UI Sync · Cost Optimization</sub>
@@ -62,68 +62,13 @@ Most Kubernetes tools (Lens, K9s, Headlamp, Rancher) assume desktop `~/.kube/con
 
 ## 🏛️ System Architecture
 
-```mermaid
-flowchart LR
-    UI["KubeOrbit Portal UI<br/>app.js · helm.js · agui.js · agui_views.js<br/>topology.js · resourcemap.js · SWR Cache"]
+<p align="center">
+  <a href="https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_architecture.png" title="View full-resolution KubeOrbit System Architecture diagram">
+    <img src="https://raw.githubusercontent.com/naveen-engg/kubeorbit-portal/main/docs/images/kubeorbit_architecture.png" alt="KubeOrbit System Architecture — Portal UI & Sliding Ask AI Drawer, FastAPI Engine, Google ADK + 27 Read-Only MCP Tools, Pluggable LLM Layer (Gemini Active Default, Anthropic Claude & OpenAI GPT Placeholders), and Zero-Key Multi-Cloud Cluster Adapters (GKE, EKS, AKS, Local)" width="100%" />
+  </a>
+</p>
 
-    subgraph Backend["FastAPI Engine (app.py)"]
-        API["REST + SSEAwareGZip + Auth Middleware<br/>auth.py · config.py (Async Secret Manager Sync)"]
-        AGUI["AG-UI v1.0 SSE Endpoint<br/>/api/clusters/{id}/ai/ag-ui"]
-        RCA["12-Step RCA · Helm Diff · SDK Pool<br/>kube_client/"]
-    end
-
-    subgraph AgentStack["Google ADK + MCP (ai_agent.py · mcp_server/)"]
-        ADK["Google ADK LlmAgent<br/>StreamingMode.SSE · LRU Sessions"]
-        MCP["27 Read-Only MCP Tools<br/>mcp_server/tools.py (HTTP GET only)"]
-        UITools["6 Interactive Portal UI Tools<br/>navigate · filter · inspect · logs · yaml*"]
-    end
-
-    subgraph LLMProviders["Pluggable LLM Layer (KUBEORBIT_AI_PROVIDER)"]
-        GEMINI["Google Gemini (Vertex AI / AI Studio)<br/>Active Default · gemini-3.5-flash"]
-        CLAUDE["Anthropic Claude (Placeholder)<br/>LiteLLM Bridge · ANTHROPIC_API_KEY"]
-        OPENAI["OpenAI GPT (Placeholder)<br/>LiteLLM Bridge · OPENAI_API_KEY"]
-    end
-
-    subgraph Adapters["Zero-Key Cluster Adapters (providers/)"]
-        GKE["GCP GKE<br/>SA Impersonation / ADC"]
-        EKS["AWS EKS<br/>OIDC WIF -> STS AssumeRole"]
-        AKS["Azure AKS<br/>Entra Federated ID + kubelogin"]
-        LOCAL["Local Kubernetes<br/>~/.kube/config (disabled on Cloud Run)"]
-    end
-
-    UI <-->|"REST JSON (GZip + SWR)"| API
-    UI <-->|"AG-UI v1.0 SSE<br/>STATE_SNAPSHOT · TOOL_CALL_* · CUSTOM"| AGUI
-    API --> RCA
-    AGUI --> ADK
-    ADK --> GEMINI
-    ADK -.->|"Placeholder"| CLAUDE
-    ADK -.->|"Placeholder"| OPENAI
-    ADK -->|"In-process IAP identity propagation"| MCP
-    MCP -->|"HTTP GET /api/..."| API
-    ADK -->|"CUSTOM: ui_action"| AGUI
-    RCA --> Adapters
-
-    classDef ui fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
-    classDef backend fill:#EEF2FF,stroke:#4F46E5,stroke-width:2px,color:#1E1B4B
-    classDef agent fill:#F3E8FF,stroke:#7C3AED,stroke-width:2px,color:#3B0764
-    classDef llmActive fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
-    classDef llmPlaceholder fill:#FEF3C7,stroke:#D97706,stroke-width:2px,stroke-dasharray:6 4,color:#78350F
-    classDef adapter fill:#CCFBF1,stroke:#0D9488,stroke-width:2px,color:#134E4A
-
-    class UI ui
-    class API,AGUI,RCA backend
-    class ADK,MCP,UITools agent
-    class GEMINI llmActive
-    class CLAUDE,OPENAI llmPlaceholder
-    class GKE,EKS,AKS,LOCAL adapter
-
-    style Backend fill:#F8FAFC,stroke:#6366F1,stroke-width:1.5px,color:#1E1B4B
-    style AgentStack fill:#FAF5FF,stroke:#9333EA,stroke-width:1.5px,color:#3B0764
-    style LLMProviders fill:#F0FDF4,stroke:#22C55E,stroke-width:1.5px,color:#14532D
-    style Adapters fill:#F0FDFA,stroke:#14B8A6,stroke-width:1.5px,color:#134E4A
-```
-
-*\*`ui_open_manifest` and `GET /manifest` enforce a hard block (`403` / `ok=False`) on `Secret` objects. Dashed LLM nodes (`Anthropic Claude` and `OpenAI`) are pluggable placeholder adapters wired via Google ADK's LiteLLM bridge.*
+*\*`ui_open_manifest` and `GET /manifest` enforce a hard block (`403` / `ok=False`) on `Secret` objects. Dashed LLM nodes (`Anthropic Claude` and `OpenAI GPT`) are pluggable placeholder adapters wired via Google ADK's LiteLLM bridge.*
 
 ---
 
