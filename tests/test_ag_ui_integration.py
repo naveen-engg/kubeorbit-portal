@@ -120,8 +120,54 @@ class TestAGUIProtocolModelsAndTools:
             assert entry["read_only"] is True
             assert entry["destructive"] is False
             assert entry["protocol"] == "mcp"
+            assert entry["title"]
             assert entry["description"]
             assert isinstance(entry["parameters"], list)
+
+    def test_fastmcp_schemas_complete_and_adk_compatible(self, monkeypatch: pytest.MonkeyPatch):
+        import asyncio
+        from mcp_server.server import mcp
+
+        async def _verify():
+            tools = await mcp.list_tools()
+            assert len(tools) == 27
+            for tool in tools:
+                assert tool.title, f"Missing title on {tool.name}"
+                assert tool.description and not tool.description.endswith("\n")
+                assert tool.annotations is not None
+                assert tool.annotations.readOnlyHint is True
+                assert tool.annotations.destructiveHint is False
+                assert tool.annotations.idempotentHint is True
+                assert tool.annotations.openWorldHint is False
+
+                in_props = (tool.inputSchema or {}).get("properties", {})
+                for p_name, p_schema in in_props.items():
+                    assert p_schema.get("description"), f"Missing input description for {tool.name}.{p_name}"
+
+                out_props = (tool.outputSchema or {}).get("properties", {})
+                assert out_props, f"Missing outputSchema properties on {tool.name}"
+                for o_name, o_schema in out_props.items():
+                    assert o_schema.get("description"), f"Missing output description for {tool.name}.{o_name}"
+
+            # End-to-end structured output execution with extra provider fields
+            class _FakeClient:
+                async def get(self, path: str, params=None):
+                    return {"cluster_id": "gke-demo", "items": [{"name": "node-1"}], "count": 1, "provider_extra": True}
+
+            monkeypatch.setattr("mcp_server.tools.get_client", lambda: _FakeClient())
+            content, structured = await mcp.call_tool("get_nodes", {"cluster_id": "gke-demo"})
+            assert content
+            assert structured["cluster_id"] == "gke-demo"
+            assert structured["count"] == 1
+            assert structured["provider_extra"] is True
+
+        asyncio.run(_verify())
+
+        from google.adk.tools import FunctionTool
+
+        for fn in _TOOL_FUNCTIONS:
+            decl = FunctionTool(fn)._get_declaration()
+            assert decl is not None and decl.name == fn.__name__
 
     def test_interactive_portal_ui_tools_validation_and_shapes(self, monkeypatch: pytest.MonkeyPatch):
         nav_ok = ai_agent.ui_navigate_portal("Diagnostics", namespace="helm-demo")
