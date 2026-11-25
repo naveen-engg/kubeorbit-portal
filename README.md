@@ -5,6 +5,7 @@
 [![Secrets: Zero Exposure](https://img.shields.io/badge/Secrets-Metadata_Only_%2F_Masked-1A73E8.svg)](#-security-architecture)
 [![MCP: 27 Read-Only Tools](https://img.shields.io/badge/MCP-27_Read--Only_Tools-6366F1.svg)](#-interactive-ai-stack-ag-ui--google-adk--mcp)
 [![Protocol: AG-UI v1.0](https://img.shields.io/badge/Protocol-AG--UI_v1.0_SSE-0EA5E9.svg)](#-interactive-ai-stack-ag-ui--google-adk--mcp)
+[![Read on Medium](https://img.shields.io/badge/Medium-Architecture_%26_Deep_Dive-000000.svg?logo=medium)](https://medium.com/@r.naveen.reddy.099/why-security-teams-keep-banning-lens-and-k9s-in-prod-so-i-built-a-read-only-k8s-portal-b257082c4566)
 
 > **Strictly Read-Only Multi-Cloud Kubernetes Diagnostics Portal, 12-Step `kubectl apply` Machine, Server-Side Secret-Masked Helm Diff & AG-UI ↔ Google ADK ↔ MCP Navigator**  
 > Unified web control plane across **GCP GKE**, **AWS EKS**, **Azure AKS**, and **Local Kubernetes** (Minikube / Docker Desktop / Kind) — built so developers and on-call SREs can diagnose staging & production safely with **zero write permissions**, **zero Secret exposure**, and **zero static cloud credentials**.
@@ -20,7 +21,9 @@
 </p>
 
 <p align="center">
-  <a href="./docs/images/kubeorbit_live_demo.mp4"><strong>▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)</strong></a><br/>
+  <a href="./docs/images/kubeorbit_live_demo.mp4"><strong>▶ Watch / Download Full 2m 41s Live HD Walkthrough (MP4)</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://medium.com/@r.naveen.reddy.099/why-security-teams-keep-banning-lens-and-k9s-in-prod-so-i-built-a-read-only-k8s-portal-b257082c4566"><strong>📖 Read the Full Architecture Write-Up on Medium</strong></a><br/>
   <sub>Live GKE recording: Cluster Map · Nodes · Namespaces (<code>kubeorbit-demo</code> &amp; <code>helm-demo</code>) · Metadata-Only Secrets · Resource, Network &amp; Storage Maps · Secret-Masked Helm Diff · Animated 12-Step Machine · Sliding Ask AI with Bidirectional Live UI Sync · Cost Optimization</sub>
 </p>
 
@@ -153,7 +156,7 @@ KUBEORBIT_MCP_TRANSPORT=streamable-http python -m mcp_server.server
 
 ## 🔬 The 12-Step `kubectl apply` Machine & Autonomous RCA
 
-Built in [`kube_client/rca.py`](./kube_client/rca.py) and documented in [`docs/12_STEP_KUBECTL_APPLY_MACHINE.md`](./docs/12_STEP_KUBECTL_APPLY_MACHINE.md) *(visual mental model inspired by Deepak Agrawal's [`infra360.io`](https://infra360.io) infographic, brought to life with real-time Kubernetes API telemetry)*:
+Built in [`kube_client/rca.py`](./kube_client/rca.py) and documented in [`docs/12_STEP_KUBECTL_APPLY_MACHINE.md`](./docs/12_STEP_KUBECTL_APPLY_MACHINE.md) *(visual mental model inspired by Deepak Agrawal's ["The kubectl apply Machine" post](https://www.linkedin.com/feed/update/urn:li:activity:7528683967684702208/) / [`infra360.io`](https://infra360.io), brought to life with real-time Kubernetes API telemetry)*:
 - **End-to-End Pipeline Attribution**: Maps live pods, events, deployments, ReplicaSets, services, NetworkPolicies, and logs onto Steps `1–12`:
   - **Steps 1–6 (Control Plane & Storage)**: `kubectl apply` (`1`) → `authn` (`2`) → `rbac-authz` (`3`) → `mutating-admission` (`4`) → `schema/validating-admission` (`5`) → `etcd` (`6`).
   - **Steps 7–8 (Controllers)**: `deployment-controller` (`7`) → `replicaset-controller` + `pod-security` / `ResourceQuota` (`8`).
@@ -343,7 +346,7 @@ Want **KubeOrbit** deployed privately inside your GCP, AWS, or Azure VPC behind 
 
 ## 🙏 Acknowledgments
 
-- **12-Step `kubectl apply` Machine Visual Concept**: Inspired by **Deepak Agrawal** ([`infra360.io`](https://infra360.io)) — KubeOrbit reimagines that 12-step mental model as a live, interactive, multi-cloud diagnostic telemetry SVG and automated Root-Cause Analysis engine.
+- **12-Step `kubectl apply` Machine Visual Concept**: Inspired by **Deepak Agrawal** (["The kubectl apply Machine" LinkedIn post](https://www.linkedin.com/feed/update/urn:li:activity:7528683967684702208/) · [`infra360.io`](https://infra360.io)) — KubeOrbit reimagines that 12-step mental model as a live, interactive, multi-cloud diagnostic telemetry SVG and automated Root-Cause Analysis engine.
 
 ---
 
