@@ -1862,6 +1862,8 @@ function deploymentRows(items) {
         pill(`Replicas: ${d.ready_replicas || d.replicas || 1}/${d.replicas || 1}`, "success"),
         h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, d.age || timeAgo(d.created_at)),
         h("button", { className: "btn btn--primary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openRolloutModal("deployment", d.name, d.namespace) }, "Rollouts"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openTimelineModal("Deployment", d.name, d.namespace) }, "Timeline"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openDriftDiffModal("Deployment", d.name, d.namespace) }, "Drift Diff"),
         h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;font-weight:600;", onclick: () => openManifestModal("Deployment", d.name, d.namespace) }, "YAML"),
       ])
     ])
@@ -1881,6 +1883,8 @@ function statefulsetRows(items) {
         pill(`${d.ready ?? 0}/${d.desired ?? 0} ready`, healthy ? "success" : "warning"),
         h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, timeAgo(d.created_at)),
         h("button", { className: "btn btn--primary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openRolloutModal("statefulset", d.name, d.namespace) }, "Rollouts"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openTimelineModal("StatefulSet", d.name, d.namespace) }, "Timeline"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openDriftDiffModal("StatefulSet", d.name, d.namespace) }, "Drift Diff"),
         h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openManifestModal("StatefulSet", d.name, d.namespace) }, "YAML"),
       ])
     ]);
@@ -1899,6 +1903,8 @@ function daemonsetRows(items) {
       h("div", { style: "display:flex;align-items:center;gap:0.5rem;" }, [
         pill(`${d.ready ?? d.available ?? 0}/${d.desired ?? 0} ready`, healthy ? "success" : "warning"),
         h("span", { style: "font-size:0.78rem;color:var(--fg-muted);" }, timeAgo(d.created_at)),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openTimelineModal("DaemonSet", d.name, d.namespace) }, "Timeline"),
+        h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openDriftDiffModal("DaemonSet", d.name, d.namespace) }, "Drift Diff"),
         h("button", { className: "btn btn--secondary btn--sm", style: "padding:0.2rem 0.55rem;font-size:0.78rem;", onclick: () => openManifestModal("DaemonSet", d.name, d.namespace) }, "YAML"),
       ])
     ]);
@@ -3773,6 +3779,199 @@ function closeRolloutModal() {
   if (modal) modal.hidden = true;
 }
 
+// -- Workload Change Timeline Modal ------------------------------------------
+
+function closeTimelineModal() {
+  const modal = $("timeline-modal");
+  if (modal) modal.hidden = true;
+}
+
+async function openTimelineModal(workloadType, name, namespace) {
+  const modal = $("timeline-modal");
+  const title = $("timeline-modal-title");
+  const subtitle = $("timeline-modal-subtitle");
+  const body = $("timeline-modal-body");
+  if (!modal || !body) return;
+
+  modal.hidden = false;
+  title.textContent = `Change Timeline — ${workloadType}/${name}`;
+  subtitle.textContent = `Cluster: ${state.selectedClusterId} · Namespace: ${namespace || "default"}`;
+  renderInto(body, loadingSkeleton());
+
+  try {
+    const data = await api.getWorkloadTimeline(state.selectedClusterId, namespace || "default", workloadType, name, 60);
+    renderTimelineModal(data);
+  } catch (err) {
+    renderInto(body, errorState(err, () => openTimelineModal(workloadType, name, namespace)));
+  }
+}
+
+function renderTimelineModal(data) {
+  const body = $("timeline-modal-body");
+  const items = data.items || [];
+  const summary = data.summary || {};
+  let activeFilter = "all";
+
+  const summaryBar = h("div", { style: "display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.85rem;" }, [
+    pill(`Rollouts: ${summary.rollouts ?? 0}`, "healthy"),
+    pill(`Helm: ${summary.helm_revisions ?? 0}`, "unknown"),
+    pill(`Config/Secret Refs: ${summary.config_refs ?? 0}`, "unknown"),
+    pill(`Events: ${summary.events ?? 0}`, summary.warnings ? "warning" : "healthy"),
+  ]);
+
+  const listBox = h("div", { style: "display:flex;flex-direction:column;gap:0.55rem;" });
+  const renderRows = () => {
+    const filtered = activeFilter === "all" ? items : items.filter((it) => it.kind === activeFilter);
+    if (!filtered.length) {
+      renderInto(listBox, emptyState("No changes recorded", "Try expanding filter scope or checking live events."));
+      return;
+    }
+    renderInto(
+      listBox,
+      h("div", { style: "display:flex;flex-direction:column;gap:0.5rem;" }, filtered.map((entry) => {
+        const badgeKind = entry.severity === "warning" ? "warning" : entry.kind === "rollout" ? "healthy" : "unknown";
+        return h("div", { style: "padding:0.75rem 0.9rem;border:1px solid var(--border);border-radius:10px;background:var(--bg-inset);" }, [
+          h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;" }, [
+            h("div", { style: "display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;" }, [
+              pill((entry.kind || "change").toUpperCase(), badgeKind),
+              h("span", { style: "font-weight:700;font-size:0.86rem;color:var(--fg);" }, entry.title || ""),
+            ]),
+            h("span", { style: "font-size:0.75rem;color:var(--fg-subtle);font-family:var(--font-mono);" }, entry.timestamp ? timeAgo(entry.timestamp) : "no timestamp"),
+          ]),
+          h("div", { style: "font-size:0.8rem;color:var(--fg-muted);margin-top:0.3rem;" }, entry.detail || ""),
+        ]);
+      }))
+    );
+  };
+
+  const filters = h("div", { style: "display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.9rem;" },
+    [["all", "All"], ["rollout", "Rollouts"], ["helm", "Helm"], ["config", "Config/Secrets"], ["event", "Events"]].map(([key, label]) =>
+      h("button", {
+        type: "button",
+        className: "btn btn--secondary btn--sm",
+        onclick: () => {
+          activeFilter = key;
+          renderRows();
+        },
+      }, label)
+    )
+  );
+
+  renderRows();
+  renderInto(body, h("div", {}, [summaryBar, filters, listBox]));
+}
+
+// -- Cross-Cluster Drift Diff Modal ------------------------------------------
+
+function closeDriftDiffModal() {
+  const modal = $("drift-modal");
+  if (modal) modal.hidden = true;
+}
+
+function openDriftDiffModal(workloadType, name, sourceNamespace) {
+  const modal = $("drift-modal");
+  const title = $("drift-modal-title");
+  const subtitle = $("drift-modal-subtitle");
+  const body = $("drift-modal-body");
+  if (!modal || !body) return;
+
+  modal.hidden = false;
+  title.textContent = `Drift Diff — ${workloadType}/${name}`;
+  subtitle.textContent = `Compare ${state.selectedClusterId} (${sourceNamespace || "default"}) against another registered cluster (Secret values masked)`;
+
+  const allClusters = [];
+  for (const team of state.teams || []) {
+    for (const env of team.environments || []) {
+      for (const cl of env.clusters || []) {
+        allClusters.push(cl);
+      }
+    }
+  }
+  const otherClusters = allClusters.filter((c) => c.id !== state.selectedClusterId);
+  const targetChoices = otherClusters.length ? otherClusters : allClusters;
+
+  const targetSelect = h("select", { class: "select", style: "width:100%;font-size:0.82rem;" },
+    targetChoices.map((c) => h("option", { value: c.id }, `${c.name || c.id} (${c.environment || c.provider || ""})`))
+  );
+  const targetNsInput = h("input", {
+    type: "text",
+    value: sourceNamespace || "default",
+    class: "select",
+    style: "width:100%;font-family:var(--font-mono);font-size:0.82rem;",
+  });
+  const resultHost = h("div", { style: "margin-top:0.9rem;" });
+
+  const runCompare = async () => {
+    const targetClusterId = targetSelect.value;
+    if (!targetClusterId) {
+      renderInto(resultHost, emptyState("No target cluster available", "Add another cluster in Clusters to compare drift."));
+      return;
+    }
+    renderInto(resultHost, loadingSkeleton());
+    try {
+      const diff = await api.getWorkloadDriftDiff({
+        source_cluster_id: state.selectedClusterId,
+        target_cluster_id: targetClusterId,
+        workload_type: workloadType,
+        name,
+        source_namespace: sourceNamespace || "default",
+        target_namespace: targetNsInput.value.trim() || sourceNamespace || "default",
+      });
+      renderDriftResult(resultHost, diff);
+    } catch (err) {
+      renderInto(resultHost, errorState(err, runCompare));
+    }
+  };
+
+  const controls = h("div", { style: "display:grid;grid-template-columns:1fr 1fr auto;gap:0.65rem;align-items:end;padding-bottom:0.75rem;border-bottom:1px solid var(--border);" }, [
+    h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.75rem;font-weight:600;color:var(--fg-muted);" }, ["Target Cluster", targetSelect]),
+    h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.75rem;font-weight:600;color:var(--fg-muted);" }, ["Target Namespace", targetNsInput]),
+    h("button", { type: "button", className: "btn btn--primary", style: "height:36px;white-space:nowrap;", onClick: runCompare }, "Compare Clusters"),
+  ]);
+
+  renderInto(body, h("div", {}, [controls, resultHost]));
+  if (targetChoices.length) runCompare();
+}
+
+function renderDriftResult(host, diff) {
+  const sections = diff.sections || [];
+  const header = h("div", { style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.75rem;" }, [
+    h("div", { style: "display:flex;align-items:center;gap:0.5rem;" }, [
+      pill(diff.has_drift ? `${diff.drift_count} Drift(s)` : "In Sync", diff.has_drift ? (diff.severity === "critical" || diff.severity === "high" ? "critical" : "warning") : "healthy"),
+      pill("Secrets SHA-256 Masked", "healthy"),
+    ]),
+    h("span", { style: "font-size:0.8rem;color:var(--fg-muted);" }, diff.summary || ""),
+  ]);
+
+  if (!sections.length) {
+    renderInto(host, h("div", {}, [header, emptyState("Zero configuration drift", `${diff.source?.label || "Source"} and ${diff.target?.label || "Target"} match across replicas, images, limits, env vars, probes, ConfigMaps, and NetworkPolicies.`)]));
+    return;
+  }
+
+  const rows = sections.map((s) =>
+    h("tr", {}, [
+      h("td", { style: "padding:0.45rem 0.6rem;border-bottom:1px solid var(--border);" }, pill(s.category, "unknown")),
+      h("td", { style: "padding:0.45rem 0.6rem;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:0.78rem;" }, s.field),
+      h("td", { style: "padding:0.45rem 0.6rem;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:0.78rem;" }, s.source_value),
+      h("td", { style: "padding:0.45rem 0.6rem;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:0.78rem;" }, s.target_value),
+      h("td", { style: "padding:0.45rem 0.6rem;border-bottom:1px solid var(--border);" }, pill(s.status, s.status === "changed" ? "warning" : "critical")),
+    ])
+  );
+
+  const table = h("table", { style: "width:100%;border-collapse:collapse;text-align:left;" }, [
+    h("thead", {}, h("tr", { style: "font-size:0.74rem;color:var(--fg-subtle);border-bottom:1.5px solid var(--border);" }, [
+      h("th", { style: "padding:0.45rem 0.6rem;" }, "Category"),
+      h("th", { style: "padding:0.45rem 0.6rem;" }, "Field"),
+      h("th", { style: "padding:0.45rem 0.6rem;" }, diff.source?.label || "Source"),
+      h("th", { style: "padding:0.45rem 0.6rem;" }, diff.target?.label || "Target"),
+      h("th", { style: "padding:0.45rem 0.6rem;" }, "Status"),
+    ])),
+    h("tbody", {}, rows),
+  ]);
+
+  renderInto(host, h("div", { style: "overflow-x:auto;" }, [header, table]));
+}
+
 // -- Pod & Container Inspector Modal -----------------------------------------
 
 async function openPodInspectorModal(podName, namespace) {
@@ -5363,10 +5562,18 @@ function wireStaticControls() {
   $("log-lines-select")?.addEventListener("change", refreshLogs);
   $("manifest-modal-close")?.addEventListener("click", closeManifestModal);
 
-  // Rollout & Pod Inspector Modal event bindings
+  // Rollout, Timeline, Drift Diff & Pod Inspector Modal event bindings
   $("rollout-modal-close")?.addEventListener("click", closeRolloutModal);
   $("rollout-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "rollout-modal") closeRolloutModal();
+  });
+  $("timeline-modal-close")?.addEventListener("click", closeTimelineModal);
+  $("timeline-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "timeline-modal") closeTimelineModal();
+  });
+  $("drift-modal-close")?.addEventListener("click", closeDriftDiffModal);
+  $("drift-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "drift-modal") closeDriftDiffModal();
   });
   $("pod-inspector-close")?.addEventListener("click", closePodInspectorModal);
   $("pod-inspector-modal")?.addEventListener("click", (e) => {
@@ -5385,6 +5592,8 @@ function wireStaticControls() {
     if (!$("logs-modal").hidden) closeLogsModal();
     if (!$("manifest-modal").hidden) closeManifestModal();
     if (!$("rollout-modal").hidden) closeRolloutModal();
+    if ($("timeline-modal") && !$("timeline-modal").hidden) closeTimelineModal();
+    if ($("drift-modal") && !$("drift-modal").hidden) closeDriftDiffModal();
     if (!$("pod-inspector-modal").hidden) closePodInspectorModal();
     if (!$("ai-diagnose-modal").hidden) closeAIDiagnoseModal();
     if ($("helm-details-modal") && !$("helm-details-modal").hidden) helmController.closeDetailsModal();

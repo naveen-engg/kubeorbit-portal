@@ -91,6 +91,10 @@ from .workloads import (
     rollout_undo,
 )
 
+# -- workload change timeline & cross-cluster drift diff -----------------------
+from .timeline import build_workload_timeline, get_workload_timeline
+from .drift import compute_workload_drift, diff_workload_across_clusters
+
 # -- root cause analysis ----------------------------------------------------------
 from .rca import diagnose_cluster_issues
 
@@ -163,6 +167,10 @@ __all__ = [
     "get_workloads_catalog",
     "rollout_undo",
     "diagnose_cluster_issues",
+    "build_workload_timeline",
+    "get_workload_timeline",
+    "compute_workload_drift",
+    "diff_workload_across_clusters",
     "evaluate_network_policy_reachability",
     "find_netpol_isolated_services",
     "simulate_network_policy",

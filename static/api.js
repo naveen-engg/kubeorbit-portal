@@ -160,6 +160,12 @@ export const api = {
   getRolloutHistory: (clusterId, namespace, workloadType, name) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/workloads/${encodeURIComponent(workloadType)}/${encodeURIComponent(name)}/rollout/history${qs({ namespace })}`),
 
+  getWorkloadTimeline: (clusterId, namespace, workloadType, name, limit = 50) =>
+    apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/workloads/${encodeURIComponent(workloadType)}/${encodeURIComponent(name)}/timeline${qs({ namespace, limit })}`),
+
+  getWorkloadDriftDiff: (params) =>
+    apiFetch(`/api/fleet/drift-diff${qs(params)}`),
+
   rollbackWorkload: (clusterId, namespace, workloadType, name, toRevision = null) =>
     apiFetch(
       `/api/clusters/${encodeURIComponent(clusterId)}/workloads/${encodeURIComponent(workloadType)}/${encodeURIComponent(name)}/rollback${qs({ namespace })}`,

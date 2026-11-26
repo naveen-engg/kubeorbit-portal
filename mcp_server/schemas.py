@@ -277,7 +277,48 @@ AuditLimitParam = Annotated[
     ),
 ]
 
+TimelineLimitParam = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=200,
+        description="Maximum number of chronological timeline entries to return newest-first (1-200, default 50).",
+    ),
+]
+
+SourceClusterIdParam = Annotated[
+    _ClusterIdStr,
+    Field(description="Source cluster identifier (baseline cluster, e.g. 'obs-sbx' or staging cluster ID)."),
+]
+
+TargetClusterIdParam = Annotated[
+    _ClusterIdStr,
+    Field(description="Target cluster identifier to compare against `source_cluster_id` (e.g. 'eks-prod-1')."),
+]
+
 SourceNamespaceParam = Annotated[
+    _NamespaceStr,
+    Field(description="Kubernetes namespace of the workload on `source_cluster_id` (1-63 chars)."),
+]
+
+TargetNamespaceParam = Annotated[
+    Optional[_NamespaceStr],
+    Field(
+        description=(
+            "Optional Kubernetes namespace of the workload on `target_cluster_id` (1-63 chars). "
+            "Omit or pass null to compare against the same namespace name as `source_namespace`."
+        ),
+    ),
+]
+
+DriftWorkloadTypeParam = Annotated[
+    Literal["Deployment", "StatefulSet", "DaemonSet", "deployment", "statefulset", "daemonset"],
+    Field(
+        description="Workload controller kind to diff across clusters: 'Deployment' (default), 'StatefulSet', or 'DaemonSet'."
+    ),
+]
+
+NetPolSourceNamespaceParam = Annotated[
     _NamespaceStr,
     Field(description="Kubernetes namespace of the source pod initiating traffic (1-63 chars)."),
 ]
@@ -325,7 +366,6 @@ NetPolProtocolParam = Annotated[
     Literal["TCP", "UDP", "SCTP"],
     Field(description="Network protocol to evaluate against NetworkPolicy port rules: 'TCP' (default), 'UDP', or 'SCTP'."),
 ]
-
 
 # --------------------------------------------------------------------------- #
 # Structured output models (emitted as MCP `outputSchema` in tools/list)
@@ -741,6 +781,46 @@ class ClusterDiagnosticsOutput(_FlexibleOutput):
     )
 
 
+class WorkloadTimelineOutput(_FlexibleOutput):
+    cluster_id: str = Field(default="", description="Cluster identifier queried.")
+    workload_type: str = Field(default="Deployment", description="Canonical workload kind inspected (Deployment, StatefulSet, or DaemonSet).")
+    name: str = Field(default="", description="Exact workload metadata.name inspected.")
+    namespace: str = Field(default="", description="Kubernetes namespace of the workload.")
+    count: int = Field(default=0, description="Number of chronological Change Timeline items returned.")
+    summary: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Breakdown counts across rollouts, helm_revisions, config_refs, events, and warnings.",
+    )
+    items: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Chronological timeline entries ordered newest-first with kind (rollout/helm/config/event), "
+            "timestamp, severity, resource_kind, resource_name, title, detail, and metadata."
+        ),
+    )
+
+
+class WorkloadDriftDiffOutput(_FlexibleOutput):
+    source_cluster_id: str = Field(default="", description="Baseline source cluster identifier.")
+    target_cluster_id: str = Field(default="", description="Target comparison cluster identifier.")
+    workload_type: str = Field(default="Deployment", description="Canonical workload kind compared across clusters.")
+    name: str = Field(default="", description="Exact workload metadata.name compared.")
+    source: Dict[str, Any] = Field(default_factory=dict, description="Source cluster & namespace label metadata.")
+    target: Dict[str, Any] = Field(default_factory=dict, description="Target cluster & namespace label metadata.")
+    has_drift: bool = Field(default=False, description="True when at least one configuration or NetworkPolicy difference was detected.")
+    drift_count: int = Field(default=0, description="Total number of drifted attributes detected.")
+    severity: str = Field(default="none", description="Overall drift severity: none, medium, high, or critical.")
+    masked_server_side: bool = Field(
+        default=True,
+        description="Always true: sensitive literal env values and ConfigMap keys are SHA-256 fingerprinted and Secret data is never read.",
+    )
+    sections: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured diff rows with category (replicas/image/resources/env/probes/configmap/networkpolicy), field, source_value, target_value, and status.",
+    )
+    summary: str = Field(default="", description="Human-readable summary of drift findings between the two clusters.")
+
+
 class NetworkPolicySimulationOutput(_FlexibleOutput):
     cluster_id: str = Field(default="", description="Cluster identifier evaluated.")
     allowed: bool = Field(default=False, description="True only if both Egress from source pod and Ingress to destination pod are permitted.")
@@ -954,11 +1034,34 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         params={"cluster_id": ClusterIdParam, "namespace": OptionalNamespaceNonSystemParam},
         output_model=ClusterDiagnosticsOutput,
     ),
+    "get_workload_timeline": ToolSpec(
+        title="Get Workload Change Timeline",
+        params={
+            "cluster_id": ClusterIdParam,
+            "namespace": RequiredNamespaceParam,
+            "workload_type": WorkloadTypeParam,
+            "name": WorkloadNameParam,
+            "limit": TimelineLimitParam,
+        },
+        output_model=WorkloadTimelineOutput,
+    ),
+    "diff_workload_across_clusters": ToolSpec(
+        title="Diff Workload Configuration Across Clusters",
+        params={
+            "source_cluster_id": SourceClusterIdParam,
+            "target_cluster_id": TargetClusterIdParam,
+            "name": WorkloadNameParam,
+            "source_namespace": SourceNamespaceParam,
+            "target_namespace": TargetNamespaceParam,
+            "workload_type": DriftWorkloadTypeParam,
+        },
+        output_model=WorkloadDriftDiffOutput,
+    ),
     "simulate_network_policy": ToolSpec(
         title="Simulate NetworkPolicy Reachability",
         params={
             "cluster_id": ClusterIdParam,
-            "source_namespace": SourceNamespaceParam,
+            "source_namespace": NetPolSourceNamespaceParam,
             "source_pod": SourcePodParam,
             "dest_namespace": DestNamespaceParam,
             "dest_pod": DestPodParam,
