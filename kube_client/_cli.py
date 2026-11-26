@@ -38,6 +38,10 @@ class ResourceTypeUnavailableError(CLIError):
     """The cluster doesn't have this API resource registered (e.g. Gateway API CRDs)."""
 
 
+class ResourceForbiddenError(CLIError):
+    """The cluster RBAC identity is forbidden (HTTP 403) from reading this resource."""
+
+
 def _sync_subprocess_exec(
     exec_cmd: List[str], full_env: Optional[Dict[str, str]], timeout: int
 ) -> Tuple[int, bytes, bytes]:
@@ -117,6 +121,8 @@ async def run_cli(
         if check:
             if "doesn't have a resource type" in stderr or "the server could not find the requested resource" in stderr:
                 raise ResourceTypeUnavailableError(cmd, returncode, stderr)
+            if "(Forbidden)" in stderr or "is forbidden" in stderr:
+                raise ResourceForbiddenError(cmd, returncode, stderr)
             raise CLIError(cmd, returncode, stderr)
     else:
         logger.debug("CLI command ok (%sms): %s", elapsed_ms, " ".join(cmd))

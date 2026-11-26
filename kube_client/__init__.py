@@ -23,6 +23,7 @@ from __future__ import annotations
 from ._cli import (
     BinaryNotFoundError,
     CLIError,
+    ResourceForbiddenError,
     ResourceTypeUnavailableError,
     run_cli,
 )
@@ -103,6 +104,7 @@ from .helm import (
 __all__ = [
     "BinaryNotFoundError",
     "CLIError",
+    "ResourceForbiddenError",
     "ResourceTypeUnavailableError",
     "run_cli",
     "TTLCache",
