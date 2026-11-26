@@ -25,6 +25,7 @@ from config import get_config_store
 
 from ._fetch import cached_kubectl_list
 from .logs import get_pod_logs
+from .netpol import find_netpol_isolated_services
 from .resources import (
     get_configmaps,
     get_daemonsets,
@@ -1385,6 +1386,7 @@ async def diagnose_cluster_issues(
         for check_ns in namespaces_with_workloads
     )) if namespaces_with_workloads else []
 
+    netpols_by_ns: Dict[str, List[Dict[str, Any]]] = {}
     for check_ns, (netpols, available) in zip(namespaces_with_workloads, netpol_results):
         if available and not netpols:
             findings.append({
@@ -1404,6 +1406,33 @@ async def diagnose_cluster_issues(
                 "resource_name": check_ns,
                 "impacted_service": check_ns,
             })
+        elif available and netpols:
+            netpols_by_ns[check_ns] = netpols
+
+    for iso in find_netpol_isolated_services(raw_pod_items, services, netpols_by_ns):
+        pols_csv = ", ".join(iso["selecting_policies"])
+        findings.append({
+            "kind": "active_failure",
+            "namespace": iso["namespace"],
+            "step_number": 12,
+            "stage_id": "step-12",
+            "step_badge": "Step 12 · CNI NetworkPolicy",
+            "component": "CNI NetworkPolicy",
+            "component_id": "datapath-routing",
+            "issue_type": "Service Isolated by Default-Deny NetworkPolicy",
+            "severity": "warning",
+            "confidence": 0.9,
+            "root_cause": (
+                f"Service '{iso['service']}' ({iso['backend_pods']} backend pod(s)) is selected by "
+                f"Ingress NetworkPolicy ({pols_csv}) with zero allowing ingress rules — incoming traffic "
+                "from callers is blocked by default-deny."
+            ),
+            "remediation_cmd": (
+                f"kubectl describe networkpolicy -n {iso['namespace']} {iso['selecting_policies'][0]}"
+            ),
+            "resource_name": f"Service/{iso['service']}",
+            "impacted_service": iso["service"],
+        })
 
     all_workloads = [*deployments, *statefulsets, *daemonsets]
     workloads_healthy = sum(1 for w in all_workloads if w.get("healthy", True))

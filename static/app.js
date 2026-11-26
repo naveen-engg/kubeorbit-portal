@@ -1345,6 +1345,141 @@ function closeResourceModal() {
 
 // -- view: topology -------------------------------------------------------
 
+function renderNetworkPolicySimulator(clusterId, defaultNamespace) {
+  const host = $("network-policy-simulator");
+  if (!host) return;
+
+  const srcNsInput = h("input", {
+    type: "text",
+    value: defaultNamespace || "default",
+    placeholder: "source namespace",
+    class: "select",
+    style: "width:100%;font-family:var(--font-mono);font-size:0.8rem;",
+  });
+  const srcPodInput = h("input", {
+    type: "text",
+    placeholder: "e.g. api-gateway-7d8c",
+    class: "select",
+    style: "width:100%;font-family:var(--font-mono);font-size:0.8rem;",
+  });
+  const dstNsInput = h("input", {
+    type: "text",
+    value: defaultNamespace || "default",
+    placeholder: "dest namespace",
+    class: "select",
+    style: "width:100%;font-family:var(--font-mono);font-size:0.8rem;",
+  });
+  const dstTargetType = h("select", { class: "select", style: "width:100%;font-size:0.8rem;" }, [
+    h("option", { value: "pod" }, "Destination Pod"),
+    h("option", { value: "service" }, "Destination Service"),
+  ]);
+  const dstTargetInput = h("input", {
+    type: "text",
+    placeholder: "pod or service name",
+    class: "select",
+    style: "width:100%;font-family:var(--font-mono);font-size:0.8rem;",
+  });
+  const portInput = h("input", {
+    type: "number",
+    placeholder: "8080 (optional)",
+    min: "1",
+    max: "65535",
+    class: "select",
+    style: "width:100%;font-family:var(--font-mono);font-size:0.8rem;",
+  });
+  const protoSelect = h("select", { class: "select", style: "width:100%;font-size:0.8rem;" }, [
+    h("option", { value: "TCP" }, "TCP"),
+    h("option", { value: "UDP" }, "UDP"),
+    h("option", { value: "SCTP" }, "SCTP"),
+  ]);
+  const resultBox = h("div", { style: "margin-top:0.85rem;" });
+
+  const runSimulation = async () => {
+    const sourceNamespace = srcNsInput.value.trim();
+    const sourcePod = srcPodInput.value.trim();
+    const destNamespace = dstNsInput.value.trim();
+    const targetName = dstTargetInput.value.trim();
+    const mode = dstTargetType.value;
+    const rawPort = portInput.value.trim();
+
+    if (!sourceNamespace || !sourcePod || !destNamespace || !targetName) {
+      renderInto(
+        resultBox,
+        h("div", { style: "font-size:0.82rem;color:var(--danger);font-weight:600;" }, "Enter source namespace, source pod, destination namespace, and destination pod or Service.")
+      );
+      return;
+    }
+
+    renderInto(resultBox, loadingSkeleton(2));
+    try {
+      const params = {
+        source_namespace: sourceNamespace,
+        source_pod: sourcePod,
+        dest_namespace: destNamespace,
+        protocol: protoSelect.value || "TCP",
+      };
+      if (mode === "service") params.dest_service = targetName;
+      else params.dest_pod = targetName;
+      if (rawPort) params.port = Number(rawPort);
+
+      const res = await api.simulateNetworkPolicy(clusterId, params);
+      const isAllowed = Boolean(res.allowed);
+      const verdictPill = pill(res.verdict || (isAllowed ? "ALLOWED" : "BLOCKED"), isAllowed ? "healthy" : "critical");
+
+      renderInto(
+        resultBox,
+        h("div", {
+          style: `padding:0.9rem 1rem;border-radius:10px;border:1px solid ${isAllowed ? "rgba(22,163,74,0.35)" : "rgba(220,38,38,0.35)"};background:${isAllowed ? "rgba(22,163,74,0.06)" : "rgba(220,38,38,0.06)"};display:flex;flex-direction:column;gap:0.55rem;`,
+        }, [
+          h("div", { style: "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;" }, [
+            h("div", { style: "display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;" }, [
+              verdictPill,
+              h("span", { style: "font-family:var(--font-mono);font-size:0.82rem;font-weight:600;" }, `${res.source?.namespace}/${res.source?.pod}  →  ${res.destination?.namespace}/${res.destination?.service || res.destination?.pod} (${res.evaluated_protocol}${res.evaluated_port ? `:${res.evaluated_port}` : ""})`),
+            ]),
+            h("div", { style: "display:flex;gap:0.4rem;flex-wrap:wrap;" }, [
+              pill(`Egress: ${res.egress_allowed ? "Allow" : "Deny"} (${res.egress_mode})`, res.egress_allowed ? "healthy" : "critical"),
+              pill(`Ingress: ${res.ingress_allowed ? "Allow" : "Deny"} (${res.ingress_mode})`, res.ingress_allowed ? "healthy" : "critical"),
+            ]),
+          ]),
+          h("ul", { style: "margin:0;padding-left:1.2rem;font-size:0.82rem;color:var(--fg-muted);display:flex;flex-direction:column;gap:0.2rem;" },
+            (res.blocking_reasons || []).map((r) => h("li", {}, r))
+          ),
+          res.suggested_fix_hint
+            ? h("pre", { style: "margin:0;padding:0.6rem 0.75rem;border-radius:8px;background:var(--bg-inset);border:1px solid var(--border);font-size:0.75rem;overflow-x:auto;white-space:pre-wrap;" }, res.suggested_fix_hint)
+            : null,
+        ])
+      );
+    } catch (err) {
+      renderInto(resultBox, errorState(err, runSimulation));
+    }
+  };
+
+  const simBody = h("div", {}, [
+    h("div", { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.65rem;align-items:end;" }, [
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Source Namespace", srcNsInput]),
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Source Pod", srcPodInput]),
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Dest Namespace", dstNsInput]),
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Target Kind", dstTargetType]),
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Dest Pod / Service", dstTargetInput]),
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Port", portInput]),
+      h("label", { style: "display:flex;flex-direction:column;gap:4px;font-size:0.74rem;font-weight:600;color:var(--fg-muted);" }, ["Protocol", protoSelect]),
+      h("button", { type: "button", class: "btn btn--primary", style: "height:36px;white-space:nowrap;", onClick: runSimulation }, "Simulate Path"),
+    ]),
+    resultBox,
+  ]);
+
+  const card = h("details", {
+    style: "background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:0.75rem 1rem;",
+  }, [
+    h("summary", { style: "cursor:pointer;font-weight:700;font-size:0.9rem;color:var(--fg);display:flex;align-items:center;gap:0.5rem;" }, [
+      "NetworkPolicy Reachability Simulator",
+      pill("Static L3/L4 · Read-Only", "healthy"),
+    ]),
+    h("div", { style: "margin-top:0.85rem;" }, simBody),
+  ]);
+  renderInto(host, card);
+}
+
 async function loadNetworkTopology(force = false) {
   const container = $("network-topology-content");
   const namespace = $("network-namespace-select").value;
@@ -1353,6 +1488,7 @@ async function loadNetworkTopology(force = false) {
     return;
   }
   const clusterId = state.selectedClusterId;
+  renderNetworkPolicySimulator(clusterId, namespace);
   await loadWithSWR({
     key: `network:${clusterId}:${namespace}`,
     tokenView: "network-topology",

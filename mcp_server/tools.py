@@ -346,3 +346,33 @@ async def diagnose_cluster_issues(cluster_id: str, namespace: Optional[str] = No
     return await get_client().get(
         f"/api/clusters/{cluster_id}/diagnostics/rca", {"namespace": namespace}
     )
+
+
+async def simulate_network_policy(
+    cluster_id: str,
+    source_namespace: str,
+    source_pod: str,
+    dest_namespace: str,
+    dest_pod: Optional[str] = None,
+    dest_service: Optional[str] = None,
+    port: Optional[int] = None,
+    protocol: str = "TCP",
+) -> dict:
+    """Simulate static L3/L4 Kubernetes NetworkPolicy reachability between a source pod and a destination pod or Service without sending live traffic.
+
+    Evaluates all matching Egress NetworkPolicies in `source_namespace` and Ingress NetworkPolicies in `dest_namespace` (including `podSelector` + `namespaceSelector` AND/OR semantics, `ipBlock` CIDR/except ranges, named container ports, `endPort`, and default-allow vs. default-deny baselines). Returns `cluster_id`, `allowed`, `verdict` (`ALLOWED`, `BLOCKED_EGRESS`, `BLOCKED_INGRESS`, or `BLOCKED_BOTH`), `egress_allowed`, `ingress_allowed`, `selecting_egress_policies`, `selecting_ingress_policies`, `allowing_egress_policies`, `allowing_ingress_policies`, `blocking_reasons`, and `suggested_fix_hint`.
+
+    Use whenever pods or Services time out silently or after `diagnose_cluster_issues` flags CNI NetworkPolicy isolation. Provide at least one of `dest_pod` or `dest_service` in `dest_namespace` (prefer `get_network_topology` or `get_namespace_resources` to discover pod/Service names).
+    """
+    return await get_client().get(
+        f"/api/clusters/{cluster_id}/networkpolicy/simulate",
+        {
+            "source_namespace": source_namespace,
+            "source_pod": source_pod,
+            "dest_namespace": dest_namespace,
+            "dest_pod": dest_pod,
+            "dest_service": dest_service,
+            "port": port,
+            "protocol": protocol,
+        },
+    )
