@@ -80,6 +80,9 @@ export const api = {
   getNetworkTopology: (clusterId, namespace) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/topology/network${qs({ namespace })}`),
 
+  simulateNetworkPolicy: (clusterId, params) =>
+    apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/networkpolicy/simulate${qs(params)}`),
+
   getStorageTopology: (clusterId, namespace) =>
     apiFetch(`/api/clusters/${encodeURIComponent(clusterId)}/topology/storage${qs({ namespace })}`),
 

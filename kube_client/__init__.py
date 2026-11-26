@@ -94,6 +94,13 @@ from .workloads import (
 # -- root cause analysis ----------------------------------------------------------
 from .rca import diagnose_cluster_issues
 
+# -- static NetworkPolicy simulator ----------------------------------------------
+from .netpol import (
+    evaluate_network_policy_reachability,
+    find_netpol_isolated_services,
+    simulate_network_policy,
+)
+
 # -- helm release history, details & revision diff ------------------------------
 from .helm import (
     diff_helm_release_revisions,
@@ -156,4 +163,7 @@ __all__ = [
     "get_workloads_catalog",
     "rollout_undo",
     "diagnose_cluster_issues",
+    "evaluate_network_policy_reachability",
+    "find_netpol_isolated_services",
+    "simulate_network_policy",
 ]
