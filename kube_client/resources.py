@@ -13,12 +13,12 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config_store
 
 from ._cache import _cache
-from ._cli import BinaryNotFoundError, CLIError, run_cli
+from ._cli import BinaryNotFoundError, CLIError, ResourceForbiddenError, run_cli
 from ._fetch import cached_kubectl_list, kubectl_json
 from .normalize import (
     _normalize_configmap,
@@ -182,22 +182,42 @@ async def get_configmaps(context: str, kubeconfig_path: Path, namespace: Optiona
     return [_normalize_configmap(c) for c in items]
 
 
+async def _list_allow_forbidden(
+    context: str,
+    kubeconfig_path: Path,
+    resource: str,
+    namespace: Optional[str],
+    ttl: int,
+    *,
+    optional: bool = False,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """List resources while treating 403 Forbidden as empty/unavailable under strict RBAC."""
+    forbidden_key = f"{context}:rbac_forbidden:{resource}:{namespace or '_all_'}"
+    if await _cache.get(forbidden_key):
+        return [], False
+    try:
+        return await cached_kubectl_list(context, kubeconfig_path, resource, namespace, ttl, optional=optional)
+    except ResourceForbiddenError:
+        await _cache.set(forbidden_key, 300, True)
+        return [], False
+
+
 async def get_secrets_metadata(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:
     """Metadata only -- Secret values and raw YAML retrieval are disabled for security."""
     ttl = get_config_store().settings.kube_cache_ttl_seconds
-    items, _ = await cached_kubectl_list(context, kubeconfig_path, "secrets", namespace, ttl)
+    items, _ = await _list_allow_forbidden(context, kubeconfig_path, "secrets", namespace, ttl)
     return [_normalize_secret_meta(s) for s in items]
 
 
 async def get_serviceaccounts(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> List[Dict[str, Any]]:
     ttl = get_config_store().settings.kube_cache_ttl_seconds
-    items, _ = await cached_kubectl_list(context, kubeconfig_path, "serviceaccounts", namespace, ttl)
+    items, _ = await _list_allow_forbidden(context, kubeconfig_path, "serviceaccounts", namespace, ttl)
     return [_normalize_serviceaccount(sa) for sa in items]
 
 
 async def get_gateways(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> Dict[str, Any]:
     ttl = get_config_store().settings.kube_cache_ttl_seconds
-    items, available = await cached_kubectl_list(
+    items, available = await _list_allow_forbidden(
         context, kubeconfig_path, "gateways.gateway.networking.k8s.io", namespace, ttl, optional=True
     )
     return {"items": [_normalize_gateway(g) for g in items], "available": available}
@@ -205,7 +225,7 @@ async def get_gateways(context: str, kubeconfig_path: Path, namespace: Optional[
 
 async def get_httproutes(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> Dict[str, Any]:
     ttl = get_config_store().settings.kube_cache_ttl_seconds
-    items, available = await cached_kubectl_list(
+    items, available = await _list_allow_forbidden(
         context, kubeconfig_path, "httproutes.gateway.networking.k8s.io", namespace, ttl, optional=True
     )
     return {"items": [_normalize_httproute(r) for r in items], "available": available}
@@ -213,7 +233,7 @@ async def get_httproutes(context: str, kubeconfig_path: Path, namespace: Optiona
 
 async def get_ingresses(context: str, kubeconfig_path: Path, namespace: Optional[str]) -> Dict[str, Any]:
     ttl = get_config_store().settings.kube_cache_ttl_seconds
-    items, available = await cached_kubectl_list(
+    items, available = await _list_allow_forbidden(
         context, kubeconfig_path, "ingresses.networking.k8s.io", namespace, ttl, optional=True
     )
     return {"items": [_normalize_ingress(i) for i in items], "available": available}
@@ -233,7 +253,7 @@ async def get_pvs(context: str, kubeconfig_path: Path) -> List[Dict[str, Any]]:
 
 async def get_storageclasses(context: str, kubeconfig_path: Path) -> List[Dict[str, Any]]:
     ttl = get_config_store().settings.cluster_meta_cache_ttl_seconds
-    items, _ = await cached_kubectl_list(context, kubeconfig_path, "storageclasses", None, ttl)
+    items, _ = await _list_allow_forbidden(context, kubeconfig_path, "storageclasses", None, ttl)
     return [_normalize_storageclass(sc) for sc in items]
 
 
