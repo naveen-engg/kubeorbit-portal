@@ -994,6 +994,43 @@ async def fleet_overview(user: CurrentUser = Depends(get_current_user)) -> Dict[
     }
 
 
+@app.get("/api/fleet/drift-diff")
+async def fleet_workload_drift_diff(
+    source_cluster_id: str = Query(..., pattern=K8S_CLUSTER_ID_PATTERN, max_length=63),
+    target_cluster_id: str = Query(..., pattern=K8S_CLUSTER_ID_PATTERN, max_length=63),
+    workload_type: str = Query("Deployment", pattern=K8S_KIND_PATTERN, max_length=63),
+    name: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    source_namespace: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    target_namespace: Optional[str] = OptionalNamespaceQuery,
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Compare workload configuration & NetworkPolicies across two clusters with RBAC on both."""
+    src_ctx, dst_ctx = await asyncio.gather(
+        get_cluster_context(source_cluster_id, user),
+        get_cluster_context(target_cluster_id, user),
+    )
+    try:
+        result = await kube_client.diff_workload_across_clusters(
+            source_context=src_ctx.context,
+            source_kubeconfig=src_ctx.kubeconfig,
+            target_context=dst_ctx.context,
+            target_kubeconfig=dst_ctx.kubeconfig,
+            source_label=src_ctx.cluster.name,
+            target_label=dst_ctx.cluster.name,
+            workload_type=workload_type,
+            name=name,
+            source_namespace=source_namespace,
+            target_namespace=target_namespace,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return {
+        "source_cluster_id": src_ctx.cluster.id,
+        "target_cluster_id": dst_ctx.cluster.id,
+        **result,
+    }
+
+
 @app.get("/api/clusters/{cluster_id}/workloads/catalog")
 async def workloads_catalog(
     namespace: Optional[str] = OptionalNamespaceQuery,
@@ -1013,6 +1050,29 @@ async def workload_rollout_history(
 ) -> Dict[str, Any]:
     """Inspect revisions and rollout history."""
     res = await kube_client.get_rollout_history(ctx.context, ctx.kubeconfig, namespace, workload_type, name)
+    return {"cluster_id": ctx.cluster.id, **res}
+
+
+@app.get("/api/clusters/{cluster_id}/workloads/{workload_type}/{name}/timeline")
+async def workload_change_timeline(
+    workload_type: str = ApiPath(..., pattern=K8S_KIND_PATTERN, max_length=63),
+    name: str = ApiPath(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    namespace: str = RequiredNamespaceQuery,
+    limit: int = Query(50, ge=1, le=200),
+    ctx: ClusterContext = Depends(get_cluster_context),
+) -> Dict[str, Any]:
+    """Chronological Change Timeline merging rollouts, Helm history, ConfigMap/Secret metadata, and events."""
+    try:
+        res = await kube_client.get_workload_timeline(
+            ctx.context,
+            ctx.kubeconfig,
+            workload_type=workload_type,
+            name=name,
+            namespace=namespace,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     return {"cluster_id": ctx.cluster.id, **res}
 
 

@@ -33,7 +33,7 @@ mcp = FastMCP(
         "- Workloads: Use `get_workloads_overview` for counts, `get_workloads_catalog` for full lists, and `get_applications` for app-grouped views.\n"
         "- Namespace views: Use `get_namespace_resources` for flat tables, `get_namespace_map` for full dependency graphs, `get_network_topology` for ingress/Gateway/Service->Pod traffic, and `get_storage_topology` for StorageClass/PV/PVC->Pod storage.\n"
         "- Events & Audit: Use `get_events` for live K8s API events, `get_extended_events` for live + in-memory history with warning counts, and `get_audit_logs` for KubeOrbit portal audit actions.\n"
-        "- Revisions & Helm: Use `get_rollout_history` for native K8s Deployment/StatefulSet/DaemonSet revisions; use `get_helm_releases`, `get_helm_release_history`, `get_helm_release_details`, and `diff_helm_revisions` for Helm charts."
+        "- Revisions & Helm: Use `get_rollout_history` for native K8s Deployment/StatefulSet/DaemonSet revisions; use `get_workload_timeline` for a merged chronological Change Timeline (rollouts + Helm + Config/Secret metadata + events); use `diff_workload_across_clusters` to compare live workload config between any two clusters; use `get_helm_releases`, `get_helm_release_history`, `get_helm_release_details`, and `diff_helm_revisions` for Helm charts."
     ),
 )
 
@@ -72,6 +72,8 @@ _TOOL_FUNCTIONS = [
     tools.get_ecosystem_overview,
     tools.get_audit_logs,
     tools.diagnose_cluster_issues,
+    tools.get_workload_timeline,
+    tools.diff_workload_across_clusters,
 ]
 
 for _fn in _TOOL_FUNCTIONS:

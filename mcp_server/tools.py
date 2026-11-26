@@ -346,3 +346,49 @@ async def diagnose_cluster_issues(cluster_id: str, namespace: Optional[str] = No
     return await get_client().get(
         f"/api/clusters/{cluster_id}/diagnostics/rca", {"namespace": namespace}
     )
+
+
+async def get_workload_timeline(
+    cluster_id: str,
+    namespace: str,
+    workload_type: str,
+    name: str,
+    limit: int = 50,
+) -> dict:
+    """Get a chronological Change Timeline for a Deployment, StatefulSet, or DaemonSet merging rollouts, Helm revisions, ConfigMap/Secret metadata, and cluster events.
+
+    Correlates ReplicaSet revision image diffs (`prev -> curr`), Helm release history (when annotated), referenced ConfigMap/Secret `resourceVersion` and timestamps (Secrets never expose `.data`/`.stringData`), and filtered Kubernetes Events ordered newest-first up to `limit` (`1-200`, default `50`). Returns `cluster_id`, `workload_type`, `name`, `namespace`, `count`, `summary`, and `items`.
+
+    Use to answer *"What changed right before this workload broke?"* without external agents. Prefer `get_rollout_history` for raw ReplicaSet revision numbers only, or `diff_workload_across_clusters` to compare live config against another cluster.
+    """
+    return await get_client().get(
+        f"/api/clusters/{cluster_id}/workloads/{workload_type}/{name}/timeline",
+        {"namespace": namespace, "limit": limit},
+    )
+
+
+async def diff_workload_across_clusters(
+    source_cluster_id: str,
+    target_cluster_id: str,
+    name: str,
+    source_namespace: str,
+    target_namespace: Optional[str] = None,
+    workload_type: str = "Deployment",
+) -> dict:
+    """Compare live configuration and NetworkPolicy posture of one workload between any two clusters (for example, staging vs. prod) with server-side secret masking.
+
+    Compares replicas, container images, CPU/memory requests and limits, environment variables (`secretKeyRef` shown as `secret:<name>/<key>` and sensitive literal values hashed with `sha256:`), liveness/readiness/startup probes, referenced ConfigMap key fingerprints, and matching NetworkPolicies. Returns `source_cluster_id`, `target_cluster_id`, `has_drift`, `drift_count`, `severity`, `masked_server_side=True`, `summary`, and structured `sections`.
+
+    Use whenever a workload behaves cleanly in one environment (such as staging) but fails in another (such as production). Enforces read-only access controls independently on both clusters.
+    """
+    return await get_client().get(
+        "/api/fleet/drift-diff",
+        {
+            "source_cluster_id": source_cluster_id,
+            "target_cluster_id": target_cluster_id,
+            "workload_type": workload_type,
+            "name": name,
+            "source_namespace": source_namespace,
+            "target_namespace": target_namespace,
+        },
+    )

@@ -115,7 +115,7 @@ class TestAGUIProtocolModelsAndTools:
 
     def test_mcp_tool_catalog_read_only_and_complete(self):
         catalog = get_mcp_tool_catalog()
-        assert len(catalog) == len(_TOOL_FUNCTIONS) == 27
+        assert len(catalog) == len(_TOOL_FUNCTIONS) == 29
         for entry in catalog:
             assert entry["read_only"] is True
             assert entry["destructive"] is False
@@ -130,7 +130,7 @@ class TestAGUIProtocolModelsAndTools:
 
         async def _verify():
             tools = await mcp.list_tools()
-            assert len(tools) == 27
+            assert len(tools) == 29
             for tool in tools:
                 assert tool.title, f"Missing title on {tool.name}"
                 assert tool.description and not tool.description.endswith("\n")
@@ -412,7 +412,7 @@ class TestAGUIHTTPEndpointsAndRBAC:
         data = r_status.json()
         assert data["protocols"]["ag_ui"]["version"] == "1.0"
         assert data["protocols"]["ag_ui"]["transport"] == "sse"
-        assert data["protocols"]["mcp"]["tool_count"] == 27
+        assert data["protocols"]["mcp"]["tool_count"] == 29
         assert data["protocols"]["mcp"]["read_only"] is True
         assert data["protocols"]["adk"]["framework"] == "google-adk"
 
@@ -421,8 +421,8 @@ class TestAGUIHTTPEndpointsAndRBAC:
         tools_payload = r_tools.json()
         assert tools_payload["protocol"] == "mcp"
         assert tools_payload["read_only"] is True
-        assert tools_payload["count"] == 27
-        assert len(tools_payload["tools"]) == 27
+        assert tools_payload["count"] == 29
+        assert len(tools_payload["tools"]) == 29
         assert len(tools_payload["ag_ui_frontend_tools"]) == 6
 
     @pytest.mark.asyncio
