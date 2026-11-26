@@ -23,6 +23,7 @@ from __future__ import annotations
 from ._cli import (
     BinaryNotFoundError,
     CLIError,
+    ResourceForbiddenError,
     ResourceTypeUnavailableError,
     run_cli,
 )
@@ -97,6 +98,13 @@ from .drift import compute_workload_drift, diff_workload_across_clusters
 # -- root cause analysis ----------------------------------------------------------
 from .rca import diagnose_cluster_issues
 
+# -- static NetworkPolicy simulator ----------------------------------------------
+from .netpol import (
+    evaluate_network_policy_reachability,
+    find_netpol_isolated_services,
+    simulate_network_policy,
+)
+
 # -- helm release history, details & revision diff ------------------------------
 from .helm import (
     diff_helm_release_revisions,
@@ -107,6 +115,7 @@ from .helm import (
 __all__ = [
     "BinaryNotFoundError",
     "CLIError",
+    "ResourceForbiddenError",
     "ResourceTypeUnavailableError",
     "run_cli",
     "TTLCache",
@@ -162,4 +171,7 @@ __all__ = [
     "get_workload_timeline",
     "compute_workload_drift",
     "diff_workload_across_clusters",
+    "evaluate_network_policy_reachability",
+    "find_netpol_isolated_services",
+    "simulate_network_policy",
 ]

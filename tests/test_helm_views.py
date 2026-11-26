@@ -449,7 +449,7 @@ class TestHelmContractsAndMCP:
         assert {"helm", "helm-history", "helm-diff"}.issubset(ai_agent._PORTAL_VIEWS)
 
         catalog = {entry["name"]: entry for entry in get_mcp_tool_catalog()}
-        assert len(catalog) == 29
+        assert len(catalog) == 30
         for tool_name in ("get_helm_releases", "get_helm_release_details", "get_helm_release_history", "diff_helm_revisions"):
             assert catalog[tool_name]["read_only"] is True
 

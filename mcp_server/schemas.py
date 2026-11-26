@@ -318,6 +318,54 @@ DriftWorkloadTypeParam = Annotated[
     ),
 ]
 
+NetPolSourceNamespaceParam = Annotated[
+    _NamespaceStr,
+    Field(description="Kubernetes namespace of the source pod initiating traffic (1-63 chars)."),
+]
+
+SourcePodParam = Annotated[
+    _ResourceNameStr,
+    Field(description="Exact pod name of the traffic source inside `source_namespace` (1-253 chars)."),
+]
+
+DestNamespaceParam = Annotated[
+    _NamespaceStr,
+    Field(description="Kubernetes namespace of the destination pod or Service (1-63 chars)."),
+]
+
+DestPodParam = Annotated[
+    Optional[_ResourceNameStr],
+    Field(
+        description=(
+            "Optional exact destination pod name inside `dest_namespace`. "
+            "Provide either `dest_pod` or `dest_service`."
+        ),
+    ),
+]
+
+DestServiceParam = Annotated[
+    Optional[_ResourceNameStr],
+    Field(
+        description=(
+            "Optional Kubernetes Service name inside `dest_namespace` (resolved to a backend pod via its label selector). "
+            "Provide either `dest_pod` or `dest_service`."
+        ),
+    ),
+]
+
+NetPolPortParam = Annotated[
+    Optional[Annotated[int, Field(ge=1, le=65535)]],
+    Field(
+        description=(
+            "Optional L4 destination port number (1-65535). When omitted with `dest_service`, inferred from the Service's first targetPort."
+        ),
+    ),
+]
+
+NetPolProtocolParam = Annotated[
+    Literal["TCP", "UDP", "SCTP"],
+    Field(description="Network protocol to evaluate against NetworkPolicy port rules: 'TCP' (default), 'UDP', or 'SCTP'."),
+]
 
 # --------------------------------------------------------------------------- #
 # Structured output models (emitted as MCP `outputSchema` in tools/list)
@@ -773,6 +821,26 @@ class WorkloadDriftDiffOutput(_FlexibleOutput):
     summary: str = Field(default="", description="Human-readable summary of drift findings between the two clusters.")
 
 
+class NetworkPolicySimulationOutput(_FlexibleOutput):
+    cluster_id: str = Field(default="", description="Cluster identifier evaluated.")
+    allowed: bool = Field(default=False, description="True only if both Egress from source pod and Ingress to destination pod are permitted.")
+    verdict: str = Field(default="ALLOWED", description="Overall L3/L4 verdict: ALLOWED, BLOCKED_EGRESS, BLOCKED_INGRESS, or BLOCKED_BOTH.")
+    egress_allowed: bool = Field(default=True, description="True if source pod Egress permits reaching the destination.")
+    ingress_allowed: bool = Field(default=True, description="True if destination pod Ingress permits receiving traffic from the source.")
+    egress_mode: str = Field(default="default-allow", description="Source Egress mode: 'default-allow' (no selecting policies) or 'policy-evaluated'.")
+    ingress_mode: str = Field(default="default-allow", description="Destination Ingress mode: 'default-allow' (no selecting policies) or 'policy-evaluated'.")
+    evaluated_port: Optional[int] = Field(default=None, description="Destination TCP/UDP/SCTP port evaluated, or null if unconstrained.")
+    evaluated_protocol: str = Field(default="TCP", description="Transport protocol evaluated (TCP, UDP, or SCTP).")
+    source: Dict[str, Any] = Field(default_factory=dict, description="Source pod metadata (`namespace`, `pod`, `pod_ip`, `labels`).")
+    destination: Dict[str, Any] = Field(default_factory=dict, description="Destination pod/service metadata (`namespace`, `pod`, `service`, `pod_ip`, `labels`).")
+    selecting_egress_policies: List[str] = Field(default_factory=list, description="Egress NetworkPolicies whose podSelector matches the source pod.")
+    selecting_ingress_policies: List[str] = Field(default_factory=list, description="Ingress NetworkPolicies whose podSelector matches the destination pod.")
+    allowing_egress_policies: List[str] = Field(default_factory=list, description="Subset of selecting Egress NetworkPolicies that permit this destination.")
+    allowing_ingress_policies: List[str] = Field(default_factory=list, description="Subset of selecting Ingress NetworkPolicies that permit this source.")
+    blocking_reasons: List[str] = Field(default_factory=list, description="Human-readable explanation of allowed or blocked NetworkPolicy paths.")
+    suggested_fix_hint: str = Field(default="", description="Targeted NetworkPolicy rule hint when reachability is blocked.")
+
+
 # --------------------------------------------------------------------------- #
 # Tool metadata registry (title + parameter annotations + structured output)
 # --------------------------------------------------------------------------- #
@@ -988,6 +1056,20 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "workload_type": DriftWorkloadTypeParam,
         },
         output_model=WorkloadDriftDiffOutput,
+    ),
+    "simulate_network_policy": ToolSpec(
+        title="Simulate NetworkPolicy Reachability",
+        params={
+            "cluster_id": ClusterIdParam,
+            "source_namespace": NetPolSourceNamespaceParam,
+            "source_pod": SourcePodParam,
+            "dest_namespace": DestNamespaceParam,
+            "dest_pod": DestPodParam,
+            "dest_service": DestServiceParam,
+            "port": NetPolPortParam,
+            "protocol": NetPolProtocolParam,
+        },
+        output_model=NetworkPolicySimulationOutput,
     ),
 }
 

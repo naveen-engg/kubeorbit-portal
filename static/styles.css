@@ -1061,6 +1061,40 @@ body.ai-chat-resizing .ai-chat-panel__resizer::after {
 .topo-node--pending rect { fill: url(#topo-grad-warning); stroke: var(--warning); }
 .topo-node--unhealthy rect { fill: url(#topo-grad-unhealthy); stroke: var(--danger); }
 .topo-node--unknown rect { fill: url(#topo-grad-unknown); stroke: var(--border-strong); }
+.topo-node rect.topo-node__accent { stroke: none; filter: none; fill: var(--accent); }
+.topo-node--kind-service rect.topo-node__accent { fill: #10b981; }
+.topo-node--kind-service .topo-node__kind { fill: #10b981; }
+.topo-node--healthy.topo-node--kind-service rect.topo-node__box { stroke: rgba(16, 185, 129, 0.58); }
+.topo-node--kind-pod rect.topo-node__accent { fill: #06b6d4; }
+.topo-node--kind-pod .topo-node__kind { fill: #06b6d4; }
+.topo-node--healthy.topo-node--kind-pod rect.topo-node__box { stroke: rgba(6, 182, 212, 0.55); }
+.topo-node--kind-ingress rect.topo-node__accent,
+.topo-node--kind-httproute rect.topo-node__accent,
+.topo-node--kind-gateway rect.topo-node__accent { fill: #8b5cf6; }
+.topo-node--kind-ingress .topo-node__kind,
+.topo-node--kind-httproute .topo-node__kind,
+.topo-node--kind-gateway .topo-node__kind { fill: #8b5cf6; }
+.topo-node--healthy.topo-node--kind-ingress rect.topo-node__box,
+.topo-node--healthy.topo-node--kind-httproute rect.topo-node__box,
+.topo-node--healthy.topo-node--kind-gateway rect.topo-node__box { stroke: rgba(139, 92, 246, 0.55); }
+.topo-node--kind-ilb rect.topo-node__accent { fill: #ec4899; }
+.topo-node--kind-ilb .topo-node__kind { fill: #ec4899; }
+.topo-node--healthy.topo-node--kind-ilb rect.topo-node__box { stroke: rgba(236, 72, 153, 0.55); }
+.topo-node--kind-workload rect.topo-node__accent { fill: #3b82f6; }
+.topo-node--kind-workload .topo-node__kind { fill: #3b82f6; }
+.topo-node--healthy.topo-node--kind-workload rect.topo-node__box { stroke: rgba(59, 130, 246, 0.55); }
+.topo-node--kind-configmap rect.topo-node__accent,
+.topo-node--kind-serviceaccount rect.topo-node__accent { fill: #64748b; }
+.topo-node--kind-configmap .topo-node__kind,
+.topo-node--kind-serviceaccount .topo-node__kind { fill: #64748b; }
+.topo-node--kind-secret rect.topo-node__accent { fill: #ec4899; }
+.topo-node--kind-secret .topo-node__kind { fill: #ec4899; }
+.topo-node--kind-storageclass rect.topo-node__accent { fill: #6366f1; }
+.topo-node--kind-storageclass .topo-node__kind { fill: #6366f1; }
+.topo-node--kind-pv rect.topo-node__accent { fill: #14b8a6; }
+.topo-node--kind-pv .topo-node__kind { fill: #14b8a6; }
+.topo-node--kind-pvc rect.topo-node__accent { fill: #f97316; }
+.topo-node--kind-pvc .topo-node__kind { fill: #f97316; }
 .topo-node.is-highlighted rect { stroke-width: 3; filter: drop-shadow(0 4px 10px rgba(22, 163, 74, 0.35)); }
 .topo-node:hover rect { filter: drop-shadow(0 5px 12px rgba(16, 24, 40, 0.2)); }
 /* On a dense namespace map (dozens of pods sharing a handful of

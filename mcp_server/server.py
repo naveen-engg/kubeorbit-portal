@@ -31,7 +31,7 @@ mcp = FastMCP(
         "- Discovery: Call `list_teams_and_clusters` first to obtain a `cluster_id`, or `get_fleet_overview` for live multi-cluster health.\n"
         "- Triage: Start with `diagnose_cluster_issues` (12-Step RCA) or `get_workloads_overview` (counts), then drill into `get_pod_details` / `get_pod_logs` / `get_manifest`.\n"
         "- Workloads: Use `get_workloads_overview` for counts, `get_workloads_catalog` for full lists, and `get_applications` for app-grouped views.\n"
-        "- Namespace views: Use `get_namespace_resources` for flat tables, `get_namespace_map` for full dependency graphs, `get_network_topology` for ingress/Gateway/Service->Pod traffic, and `get_storage_topology` for StorageClass/PV/PVC->Pod storage.\n"
+        "- Namespace views: Use `get_namespace_resources` for flat tables, `get_namespace_map` for full dependency graphs, `get_network_topology` for ingress/Gateway/Service->Pod traffic, `simulate_network_policy` to test L3/L4 pod-to-pod/Service NetworkPolicy reachability, and `get_storage_topology` for StorageClass/PV/PVC->Pod storage.\n"
         "- Events & Audit: Use `get_events` for live K8s API events, `get_extended_events` for live + in-memory history with warning counts, and `get_audit_logs` for KubeOrbit portal audit actions.\n"
         "- Revisions & Helm: Use `get_rollout_history` for native K8s Deployment/StatefulSet/DaemonSet revisions; use `get_workload_timeline` for a merged chronological Change Timeline (rollouts + Helm + Config/Secret metadata + events); use `diff_workload_across_clusters` to compare live workload config between any two clusters; use `get_helm_releases`, `get_helm_release_history`, `get_helm_release_details`, and `diff_helm_revisions` for Helm charts."
     ),
@@ -74,6 +74,7 @@ _TOOL_FUNCTIONS = [
     tools.diagnose_cluster_issues,
     tools.get_workload_timeline,
     tools.diff_workload_across_clusters,
+    tools.simulate_network_policy,
 ]
 
 for _fn in _TOOL_FUNCTIONS:

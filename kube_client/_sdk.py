@@ -19,7 +19,7 @@ import kubernetes.config
 from kubernetes.client.exceptions import ApiException
 
 from config import get_runtime_env
-from ._cli import CLIError, ResourceTypeUnavailableError
+from ._cli import CLIError, ResourceForbiddenError, ResourceTypeUnavailableError
 
 logger = logging.getLogger("kubeorbit.kube_client")
 
@@ -299,6 +299,8 @@ def _sync_sdk_list(
             if r in _GATEWAY_API_RESOURCES:
                 raise ResourceTypeUnavailableError(f"Resource type '{resource}' is not available on cluster") from e
             return None, False
+        if e.status == 403:
+            raise ResourceForbiddenError(["sdk", "list", resource], 403, str(e)) from e
         logger.debug("SDK list failed for %s (%s), falling back to CLI", resource, e)
         return None, False
     except Exception as e:

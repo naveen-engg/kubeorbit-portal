@@ -701,6 +701,40 @@ async def network_topology(
     return {"cluster_id": ctx.cluster.id, **graph}
 
 
+@app.get("/api/clusters/{cluster_id}/networkpolicy/simulate")
+async def simulate_network_policy(
+    source_namespace: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    source_pod: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=253),
+    dest_namespace: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=63),
+    dest_pod: Optional[str] = Query(None, pattern=K8S_NAME_PATTERN, max_length=253),
+    dest_service: Optional[str] = Query(None, pattern=K8S_NAME_PATTERN, max_length=253),
+    port: Optional[int] = Query(None, ge=1, le=65535),
+    protocol: str = Query("TCP", pattern="^(TCP|UDP|SCTP)$"),
+    ctx: ClusterContext = Depends(get_cluster_context),
+) -> Dict[str, Any]:
+    """Simulate L3/L4 Kubernetes NetworkPolicy reachability (strictly read-only)."""
+    if not dest_pod and not dest_service:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'dest_pod' or 'dest_service' to simulate reachability.",
+        )
+    try:
+        result = await kube_client.simulate_network_policy(
+            ctx.context,
+            ctx.kubeconfig,
+            source_namespace=source_namespace,
+            source_pod=source_pod,
+            dest_namespace=dest_namespace,
+            dest_pod=dest_pod,
+            dest_service=dest_service,
+            port=port,
+            protocol=protocol,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    return {"cluster_id": ctx.cluster.id, **result}
+
+
 @app.get("/api/clusters/{cluster_id}/topology/storage")
 async def storage_topology(
     namespace: str = RequiredNamespaceQuery,
