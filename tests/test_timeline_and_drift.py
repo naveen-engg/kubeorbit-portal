@@ -450,3 +450,42 @@ class TestTimelineAndDriftHTTPAndMCP:
         assert secret_items[0]["resource_name"] == "api-secret"
         assert secret_items[0]["metadata"]["masked_server_side"] is True
         assert secret_items[0]["metadata"]["rbac_restricted"] is True
+
+    @pytest.mark.asyncio
+    async def test_drift_diff_respects_distinct_target_namespace(
+        self,
+        async_client: httpx.AsyncClient,
+        isolated_env: Dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        kcfg_home = isolated_env["kubeconfig_home"]
+        monkeypatch.setattr("app.build_provider", lambda cfg: _StubProvider(cfg, kcfg_home))
+
+        apps_dep = _deployment("checkout-api", "apps", replicas=3, image="api:v2.0")
+        staging_dep = _deployment("checkout-api", "staging", replicas=1, image="api:v1.9")
+
+        async def _fake_list(context, kubeconfig_path, resource, namespace=None, ttl=15, **kwargs):
+            if resource == "deployments":
+                if namespace == "staging":
+                    return [staging_dep], True
+                return [apps_dep], True
+            return [], True
+
+        monkeypatch.setattr("kube_client.drift.cached_kubectl_list", _fake_list)
+
+        r = await async_client.get(
+            "/api/fleet/drift-diff",
+            params={
+                "source_cluster_id": "obs-sbx",
+                "target_cluster_id": "obs-sbx",
+                "name": "checkout-api",
+                "source_namespace": "apps",
+                "target_namespace": "staging",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["source_namespace"] == "apps"
+        assert body["target_namespace"] == "staging"
+        assert body["has_drift"] is True
+        assert any(s["category"] == "replicas" for s in body["sections"])

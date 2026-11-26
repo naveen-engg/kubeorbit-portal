@@ -1001,7 +1001,7 @@ async def fleet_workload_drift_diff(
     workload_type: str = Query("Deployment", pattern=K8S_KIND_PATTERN, max_length=63),
     name: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=253),
     source_namespace: str = Query(..., pattern=K8S_NAME_PATTERN, max_length=63),
-    target_namespace: Optional[str] = OptionalNamespaceQuery,
+    target_namespace: Optional[str] = Query(None, pattern=K8S_NAME_PATTERN, max_length=63),
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Compare workload configuration & NetworkPolicies across two clusters with RBAC on both."""
