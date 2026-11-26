@@ -363,15 +363,16 @@ export function renderTopologyGraph(graph, columnOrder, animate = true, onNodeCl
       "g",
       { class: animate ? "topo-node__inner is-entering" : "topo-node__inner", style: animate ? `animation-delay:${nodeIdx * nodeDelayStep}ms;` : undefined },
       [
-        h("rect", { width: NODE_W, height: NODE_H, rx: 10 }),
-        h("text", { class: "topo-node__kind", x: 12, y: 18 }, (n.kind || "").toUpperCase()),
-        h("text", { x: 12, y: 37 }, label),
+        h("rect", { class: "topo-node__box", width: NODE_W, height: NODE_H, rx: 10 }),
+        h("rect", { class: "topo-node__accent", x: 1.5, y: 6, width: 4, height: NODE_H - 12, rx: 2 }),
+        h("text", { class: "topo-node__kind", x: 14, y: 18 }, (n.kind || "").toUpperCase()),
+        h("text", { x: 14, y: 37 }, label),
       ]
     );
     const g = h(
       "g",
       {
-        class: `topo-node topo-node--${n.status || "unknown"}`,
+        class: `topo-node topo-node--${n.status || "unknown"} topo-node--kind-${n.kind || "unknown"}`,
         transform: `translate(${pos.x}, ${pos.y})`,
         tabindex: "0",
         role: "button",
