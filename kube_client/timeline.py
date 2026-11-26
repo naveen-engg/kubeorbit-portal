@@ -244,19 +244,29 @@ def build_workload_timeline(
 
     for sec_name in secret_refs:
         sec = sec_by_name.get(sec_name)
-        if not sec:
-            continue
-        rv = sec.get("resource_version") or "?"
-        items.append({
-            "kind": "config",
-            "timestamp": sec.get("created_at") or "",
-            "severity": "info",
-            "resource_kind": "Secret",
-            "resource_name": sec_name,
-            "title": f"Secret '{sec_name}' (resourceVersion {rv}, metadata only)",
-            "detail": "Referenced by workload; Secret keys/values omitted server-side for security.",
-            "metadata": {"resource_version": rv, "masked_server_side": True},
-        })
+        if sec:
+            rv = sec.get("resource_version") or "?"
+            items.append({
+                "kind": "config",
+                "timestamp": sec.get("created_at") or "",
+                "severity": "info",
+                "resource_kind": "Secret",
+                "resource_name": sec_name,
+                "title": f"Secret '{sec_name}' (resourceVersion {rv}, metadata only)",
+                "detail": "Referenced by workload; Secret keys/values omitted server-side for security.",
+                "metadata": {"resource_version": rv, "masked_server_side": True},
+            })
+        else:
+            items.append({
+                "kind": "config",
+                "timestamp": "",
+                "severity": "info",
+                "resource_kind": "Secret",
+                "resource_name": sec_name,
+                "title": f"Secret '{sec_name}' (referenced; RBAC metadata restricted)",
+                "detail": "Referenced by workload podSpec; Secret object access omitted under strict read-only RBAC.",
+                "metadata": {"resource_version": None, "masked_server_side": True, "rbac_restricted": True},
+            })
 
     # 4. Kubernetes runtime events tied to workload, ReplicaSets, or Pods
     rs_names = {entry[4] for entry in rs_entries if entry[4]}
@@ -323,6 +333,15 @@ async def _safe_helm_history(
         return None
 
 
+async def _safe_secrets_metadata(
+    context: str, kubeconfig_path: Path, namespace: str
+) -> List[Dict[str, Any]]:
+    try:
+        return await get_secrets_metadata(context, kubeconfig_path, namespace)
+    except Exception:
+        return []
+
+
 async def get_workload_timeline(
     context: str,
     kubeconfig_path: Path,
@@ -341,7 +360,7 @@ async def get_workload_timeline(
         cached_kubectl_list(context, kubeconfig_path, plural_res, namespace, cache_ttl),
         cached_kubectl_list(context, kubeconfig_path, "replicasets", namespace, cache_ttl, optional=True),
         cached_kubectl_list(context, kubeconfig_path, "configmaps", namespace, cache_ttl, optional=True),
-        get_secrets_metadata(context, kubeconfig_path, namespace),
+        _safe_secrets_metadata(context, kubeconfig_path, namespace),
         get_extended_events(context, kubeconfig_path, namespace=namespace, limit=200),
         _safe_rollout_history(context, kubeconfig_path, namespace, canonical_kind.lower(), name),
     )

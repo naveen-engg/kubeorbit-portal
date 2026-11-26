@@ -10,8 +10,9 @@ import pytest
 import yaml
 
 import config
+from kube_client import CLIError
 from kube_client.drift import compute_workload_drift
-from kube_client.timeline import build_workload_timeline
+from kube_client.timeline import build_workload_timeline, get_workload_timeline
 from providers.base import BaseKubeProvider, ClusterAuthResult, ClusterMeta, ProviderIdentity
 
 
@@ -393,3 +394,59 @@ class TestTimelineAndDriftHTTPAndMCP:
             assert mcp_drift["has_drift"] is True
         finally:
             reset_inprocess_user(tok)
+
+    @pytest.mark.asyncio
+    async def test_timeline_survives_strict_readonly_secret_forbidden(
+        self,
+        isolated_env: Dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        dep = _deployment("checkout-api", "prod")
+        rs_1 = {
+            "metadata": {
+                "name": "checkout-api-rs1",
+                "creationTimestamp": "2026-11-26T10:00:00Z",
+                "annotations": {"deployment.kubernetes.io/revision": "1"},
+                "ownerReferences": [{"kind": "Deployment", "name": "checkout-api"}],
+            },
+            "spec": {"template": {"spec": {"containers": [{"name": "api", "image": "api:v1.0.0"}]}}},
+        }
+        cfg = {"metadata": {"name": "api-cfg", "resourceVersion": "42", "creationTimestamp": "2026-11-26T10:01:00Z"}, "data": {"PORT": "8080"}}
+
+        async def _fake_list(context, kubeconfig_path, resource, namespace=None, ttl=15, **kwargs):
+            if resource == "deployments":
+                return [dep], True
+            if resource == "replicasets":
+                return [rs_1], True
+            if resource == "configmaps":
+                return [cfg], True
+            return [], True
+
+        async def _forbidden_secrets(*args, **kwargs):
+            raise CLIError("kubectl get secrets failed: User 'ko-ro' cannot list resource 'secrets' in API group '' (403 Forbidden)")
+
+        async def _fake_events(*args, **kwargs):
+            return {"items": []}
+
+        async def _fake_rollout(*args, **kwargs):
+            return {"revisions": []}
+
+        monkeypatch.setattr("kube_client.timeline.cached_kubectl_list", _fake_list)
+        monkeypatch.setattr("kube_client.timeline.get_secrets_metadata", _forbidden_secrets)
+        monkeypatch.setattr("kube_client.timeline.get_extended_events", _fake_events)
+        monkeypatch.setattr("kube_client.timeline.get_rollout_history", _fake_rollout)
+
+        res = await get_workload_timeline(
+            "ctx-obs-sbx",
+            isolated_env["kubeconfig_home"] / "obs-sbx.yaml",
+            workload_type="Deployment",
+            name="checkout-api",
+            namespace="prod",
+        )
+        assert res["summary"]["rollouts"] == 1
+        assert res["summary"]["config_refs"] == 2
+        secret_items = [i for i in res["items"] if i["resource_kind"] == "Secret"]
+        assert len(secret_items) == 1
+        assert secret_items[0]["resource_name"] == "api-secret"
+        assert secret_items[0]["metadata"]["masked_server_side"] is True
+        assert secret_items[0]["metadata"]["rbac_restricted"] is True
