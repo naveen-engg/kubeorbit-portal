@@ -1,8 +1,0 @@
-subscription_id       = "00000000-0000-0000-0000-000000000000"
-location              = "eastus"
-resource_group_name   = "rg-kubeorbit-aks"
-cluster_name          = "kubeorbit-aks"
-environment           = "sandbox"
-cloudrun_sa_unique_id = "112233445566778899000" # Paste runner_sa_unique_id from terraform/cloud-run
-vm_size               = "Standard_B2s_v2"
-node_count            = 1

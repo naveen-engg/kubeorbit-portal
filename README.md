@@ -133,7 +133,6 @@ Engineered for snappy multi-cluster navigation on Cloud Run and local workstatio
 ├── mcp_server/                   # Standalone & in-process Read-Only FastMCP server (27 HTTP-GET tools)
 ├── providers/                    # Pluggable cluster auth & cloud metadata adapters (gke, eks, aks, local, pricing)
 ├── static/                       # Zero-build ES-module frontend (index.html, app.js, helm.js, agui.js, agui_views.js, ...)
-├── terraform/                    # Production IaC stacks (Cloud Run + IAP, GKE, EKS OIDC WIF, AKS Federated ID)
 ├── tests/                        # 115+ unit, integration, concurrency, Helm, AG-UI, and security tests
 ├── config/clusters.example.yaml  # Sample multi-team / multi-cloud cluster registry
 ├── docs/                         # 12-Step kubectl apply Machine documentation & diagrams
@@ -236,23 +235,14 @@ Verify status: `curl http://localhost:8080/api/status`.
 
 ---
 
-## 🏢 Enterprise Production Deployment (Terraform + Multi-Cloud)
+## 🏢 Enterprise VPC Deployment (Commercial Pack)
 
-Complete modular Terraform configurations live in [`terraform/`](./terraform/README.md):
-- [`terraform/cloud-run/`](./terraform/cloud-run/README.md) — Artifact Registry, VPC + Cloud NAT static egress IP, Secret Manager, `kubeorbit-runner` SA, Cloud Run v2 behind IAP (`min_instance_count=1`, `max_instance_count=1`), and Custom IAM Roles.
-- [`terraform/gke/`](./terraform/gke/README.md) — VPC/Subnet, GKE cluster, `kubeorbit-gke-reader` SA impersonation, and read-only K8s ClusterRole/Binding.
-- [`terraform/eks/`](./terraform/eks/README.md) — EKS cluster + OIDC Web Identity role trusting GCP `kubeorbit-runner`.
-- [`terraform/aks/`](./terraform/aks/README.md) — AKS cluster + Entra Federated Identity Credential trusting GCP `kubeorbit-runner`.
+For teams deploying **KubeOrbit** into regulated private AWS EKS, Azure AKS, or Google GKE environments, all modular Infrastructure-as-Code (`terraform/cloud-run/`, attach-only `terraform/attach-{eks,aks,gke}/`), our hardened non-root in-cluster Helm chart (`helm/kubeorbit-enterprise/`), and automated InfoSec audit scripts (`verify-infosec`) live in the **KubeOrbit Enterprise VPC Deployment Pack**:
 
-```bash
-# Build & deploy immutable digest to Cloud Run
-gcloud builds submit --project=<gcp-project-id> \
-  --tag us-central1-docker.pkg.dev/<gcp-project-id>/kubeorbit-repo/kubeorbit:latest .
-
-gcloud run services update kubeorbit --region=us-central1 --project=<gcp-project-id> \
-  --image=us-central1-docker.pkg.dev/<gcp-project-id>/kubeorbit-repo/kubeorbit@<digest> \
-  --max-instances=1
-```
+- **Enterprise Pack & Architecture:** [**https://caliperops.dev/kubeorbit**](https://caliperops.dev/kubeorbit)
+  - Hardened In-Cluster Helm Chart (`UID 10001`, `readOnlyRootFilesystem`, `NetworkPolicy`, non-secret `ClusterRole`)
+  - Attach-only zero-key WIF Terraform for existing EKS, AKS, and GKE clusters + hardened GCP Cloud Run + IAP stack
+  - Automated HTTP `403` & `kubectl auth can-i` InfoSec verification scripts and production upgrade runbooks
 
 ---
 
@@ -276,8 +266,8 @@ node --check static/agui_views.js
 
 ## 🤝 Enterprise Private VPC Rollout & Advisory
 
-Want **KubeOrbit** deployed privately inside your GCP, AWS, or Azure VPC behind corporate SSO/IAP with zero-key multi-cloud WIF and team onboarding?
-- Open a GitHub Discussion / Issue on [`naveen-engg/kubeorbit-portal`](https://github.com/naveen-engg/kubeorbit-portal), or reach out directly via LinkedIn / GitHub profile for fixed-scope private enterprise setup sprints, architecture reviews, or platform engineering engagements.
+Want **KubeOrbit** deployed privately inside your GCP, AWS, or Azure VPC behind corporate SSO / OIDC / IAP with zero-key multi-cloud WIF and team onboarding?
+- Request the **Enterprise VPC Pack ($499)** or **Private VPC Rollout & Support ($1,500)** at [**https://caliperops.dev/kubeorbit**](https://caliperops.dev/kubeorbit), or open a GitHub Discussion on [`naveen-engg/kubeorbit-portal`](https://github.com/naveen-engg/kubeorbit-portal).
 
 ---
 
