@@ -77,6 +77,9 @@ _TOOL_FUNCTIONS = [
     tools.simulate_network_policy,
 ]
 
+_EXTENSION_TOOLS: list[tuple] = []
+_REGISTERED_EXTENSION_NAMES: set[str] = set()
+
 for _fn in _TOOL_FUNCTIONS:
     _spec = TOOL_SPECS[_fn.__name__]
     _wrapped = build_mcp_tool_wrapper(_fn, _spec)
@@ -87,16 +90,42 @@ for _fn in _TOOL_FUNCTIONS:
     )(_wrapped)
 
 
+def register_extension_tool(fn, spec) -> None:
+    """Register an extension-supplied strictly read-only MCP tool dynamically."""
+    name = fn.__name__
+    if name in _REGISTERED_EXTENSION_NAMES or name in TOOL_SPECS:
+        return
+    wrapped = build_mcp_tool_wrapper(fn, spec)
+    mcp.tool(
+        title=spec.title,
+        annotations=_READ_ONLY,
+        structured_output=True,
+    )(wrapped)
+    _REGISTERED_EXTENSION_NAMES.add(name)
+    _EXTENSION_TOOLS.append((fn, spec))
+
+
+def reset_extension_tools_for_testing() -> None:
+    """Remove dynamically registered extension MCP tools (strictly for tests)."""
+    tool_mgr = getattr(mcp, "_tool_manager", None)
+    tools_dict = getattr(tool_mgr, "_tools", None)
+    for fn, _ in list(_EXTENSION_TOOLS):
+        if isinstance(tools_dict, dict):
+            tools_dict.pop(fn.__name__, None)
+    _EXTENSION_TOOLS.clear()
+    _REGISTERED_EXTENSION_NAMES.clear()
+
+
 def get_mcp_tool_catalog() -> list[dict]:
     """Return metadata for all read-only MCP tools exposed by KubeOrbit."""
     import inspect
 
     catalog: list[dict] = []
-    for fn in _TOOL_FUNCTIONS:
+    combined = [(fn, TOOL_SPECS[fn.__name__]) for fn in _TOOL_FUNCTIONS] + list(_EXTENSION_TOOLS)
+    for fn, spec in combined:
         doc = inspect.getdoc(fn) or ""
         first_line = next((line.strip() for line in doc.splitlines() if line.strip()), "")
         sig = inspect.signature(fn)
-        spec = TOOL_SPECS[fn.__name__]
         params = [
             {
                 "name": p_name,
