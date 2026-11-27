@@ -235,13 +235,39 @@ Verify status: `curl http://localhost:8080/api/status`.
 
 ---
 
-## 🏢 Enterprise VPC Deployment (Commercial Pack)
+## 🏢 KubeOrbit Enterprise (Commercial Modules & VPC Pack)
 
-For teams deploying **KubeOrbit** into regulated private AWS EKS, Azure AKS, or Google GKE environments, all modular Infrastructure-as-Code (`terraform/cloud-run/`, attach-only `terraform/attach-{eks,aks,gke}/`), our hardened non-root in-cluster Helm chart (`helm/kubeorbit-enterprise/`), and automated InfoSec audit scripts (`verify-infosec`) live in the **KubeOrbit Enterprise VPC Deployment Pack**:
+KubeOrbit OSS remains Apache 2.0 free forever. For regulated production teams deploying inside private AWS EKS, Azure AKS, or Google GKE VPCs, **KubeOrbit Enterprise** builds seamlessly on top of the OSS core (via [`extensions.py`](./extensions.py)) with strictly read-only governance, AI/ML infrastructure diagnostics, and hardened VPC deployment tooling (**33 read-only MCP tools** total, zero Kubernetes `Secret` access):
+
+### Enterprise Feature Modules
+- **Cluster RBAC Explorer & Blast-Radius Visualizer (`RBAC` tab · `inspect_cluster_rbac` MCP tool):**
+  - End-to-end `Group / User / ServiceAccount → RoleBinding / ClusterRoleBinding → Role / ClusterRole → Running Pods` tracing and interactive SVG blast-radius graph.
+  - Built-in **`Who Can?`** permission simulator, automated high-risk detection (`cluster-admin`, wildcard `*`, `secrets`, `pods/exec`, bound `default` ServiceAccounts), and Markdown/JSON audit export.
+- **Compliance & Policy Posture + Interactive "How to Fix" Playbooks (`Compliance` tab · `inspect_compliance_posture` MCP tool):**
+  - Evaluates **8 controls** mapped across **CIS Kubernetes v1.9**, **SOC 2**, and **EU DORA** with equal-weight scoring and `A–F` grading.
+  - Inspects **Pod Security Standards (Baseline & Restricted)**, ingests vendor-neutral **`wgpolicyk8s.io` `PolicyReport` / `ClusterPolicyReport`** results (Kyverno `v1.20+` CEL & OPA Gatekeeper), and audits Namespace hardening (`pod-security.kubernetes.io/*` + `NetworkPolicy` isolation).
+  - Generates a prioritized **`How to Fix` roadmap**, per-resource YAML / `kubectl` playbooks with one-click **Copy Fix**, and **SHA-256 signed Markdown/JSON** evidence bundles.
+- **AI / ML Ops & Distributed Accelerator Diagnostics (`AI / ML Ops` tab · `inspect_ai_ml_workloads` MCP tool):**
+  - Detects **7 deterministic AI/HPC failure modes**: `/dev/shm` 64 MB NCCL deadlocks, aggressive `livenessProbe` model weight-load kills, NVIDIA **XID/ECC** hardware faults, **`LeaderWorkerSet`** >51-char label overflows, **`KubeRay`** head-pod GPU leaks, CUDA/`RuntimeClass` skew, and Spot preemption missing-checkpoint PVC risks.
+  - Includes a **Kueue** (`ClusterQueue`, `LocalQueue`, `ResourceFlavor`, `Workload` `QuotaReserved=False`) & **DRA** (`DeviceClass`, `ResourceSlice`, `ResourceClaim`, plus the `AI_KUEUE_DRA_MISSING_MAPPING` trap) pending-job debugger, 4-column gang & queue SVG topology, and CPU-only cluster support.
+- **Secret-Blind Helm Component Discovery & Resilient Ecosystem Adapters:**
+  - Reconstructs Helm releases and live non-Secret component inventories from `app.kubernetes.io/managed-by=Helm` labels and `meta.helm.sh/release-name` annotations even when cluster RBAC permanently forbids `secrets` (`sh.helm.release.v1.*`).
+  - Wraps **Ecosystem & CRDs** auto-discovery with graceful `403` handling and Kyverno `v1.20+` CEL CRD detection (`ValidatingPolicy`, `NamespacedValidatingPolicy`).
+
+### Hardened VPC Deployment Pack & OSS Comparison
+
+| Capability | **KubeOrbit OSS** *(Apache 2.0)* | **KubeOrbit Enterprise** *(Commercial Pack)* |
+| :--- | :---: | :---: |
+| **Core Multi-Cloud Portal, 12-Step RCA & Secret-Masked Helm Diff** | Included (base OSS MCP suite) | Included (**33** read-only MCP tools total) |
+| **Cluster RBAC Explorer, Blast-Radius Graph & `Who Can?` Simulator** | — | Included (`RBAC` tab) |
+| **CIS v1.9 / SOC 2 / DORA Compliance, PSS, Kyverno & How-to-Fix Playbooks** | — | Included (`Compliance` tab + SHA-256 export) |
+| **AI/ML Ops (Kueue, DRA, LWS, KubeRay, XID/ECC & `/dev/shm` Rules)** | — | Included (`AI / ML Ops` tab) |
+| **Secret-Blind Helm Discovery (Zero `secrets` RBAC) & Resilient Ecosystem** | — | Included |
+| **Hardened Helm Chart, Zero-Key EKS/AKS/GKE WIF Terraform & InfoSec Verify Scripts** | — | Included (`UID 10001`, IAP hub, `verify-infosec`) |
 
 - **Enterprise Pack & Architecture:** [**https://caliperops.dev/kubeorbit**](https://caliperops.dev/kubeorbit)
-  - Hardened In-Cluster Helm Chart (`UID 10001`, `readOnlyRootFilesystem`, `NetworkPolicy`, non-secret `ClusterRole`)
-  - Attach-only zero-key WIF Terraform for existing EKS, AKS, and GKE clusters + hardened GCP Cloud Run + IAP stack
+  - Hardened In-Cluster Helm Chart (`UID 10001`, `readOnlyRootFilesystem`, `NetworkPolicy`, zero-`secrets` `ClusterRole`)
+  - Attach-only zero-key WIF Terraform for existing EKS, AKS, and GKE clusters + central Cloud Run IAP hub (`terraform/cloud-run/`, `terraform/attach-{eks,aks,gke}/`)
   - Automated HTTP `403` & `kubectl auth can-i` InfoSec verification scripts and production upgrade runbooks
 
 ---
