@@ -171,6 +171,7 @@ def _normalize_pod(p: Dict[str, Any]) -> Dict[str, Any]:
         "restarts": restarts,
         "node": spec.get("nodeName"),
         "pod_ip": status.get("podIP"),
+        "service_account": spec.get("serviceAccountName") or spec.get("serviceAccount") or "default",
         "qos_class": status.get("qosClass", "BestEffort"),
         "owner": owner_ref,
         "created_at": _age_iso(p),

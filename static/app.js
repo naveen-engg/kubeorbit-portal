@@ -5331,7 +5331,7 @@ const viewLoaders = {
 };
 
 
-function registerExtensionView(viewId, { label, subtitle = "", iconHtml = "", load } = {}) {
+function registerExtensionView(viewId, { label, subtitle = "", iconHtml = "", insertBeforeSelector = "", load } = {}) {
   if (!viewId || typeof load !== "function") return;
   const sidebarNav = $("sidebar-nav");
   const mainEl = $("main");
@@ -5351,7 +5351,12 @@ function registerExtensionView(viewId, { label, subtitle = "", iconHtml = "", lo
       },
       [iconSpan, h("span", {}, label || viewId)]
     );
-    sidebarNav.appendChild(btn);
+    const anchor = insertBeforeSelector ? sidebarNav.querySelector(insertBeforeSelector) : null;
+    if (anchor && anchor.parentNode === sidebarNav) {
+      sidebarNav.insertBefore(btn, anchor);
+    } else {
+      sidebarNav.appendChild(btn);
+    }
   }
   if (mainEl && !mainEl.querySelector(`.view[data-view="${viewId}"]`)) {
     const section = h("section", { id: `view-${viewId}`, class: "view", "data-view": viewId, hidden: true }, [

@@ -11,7 +11,7 @@ import pytest
 import config
 import extensions
 from mcp_server import schemas, server as mcp_server
-from kube_client import _cli, _sdk
+from kube_client import _cli, _sdk, normalize
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +143,22 @@ class TestExtensionHooksAndRbacSdk:
         mcp_server.reset_extension_tools_for_testing()
         assert len(mcp_server.get_mcp_tool_catalog()) == 30
         assert len(asyncio.run(mcp_server.mcp.list_tools())) == 30
+
+    def test_normalize_pod_extracts_service_account(self):
+        explicit = normalize._normalize_pod(
+            {
+                "metadata": {"name": "ci-runner-7d9f", "namespace": "payments"},
+                "spec": {"serviceAccountName": "ci-bot", "containers": []},
+                "status": {"phase": "Running"},
+            }
+        )
+        assert explicit["service_account"] == "ci-bot"
+
+        defaulted = normalize._normalize_pod(
+            {
+                "metadata": {"name": "anon-pod", "namespace": "default"},
+                "spec": {"containers": []},
+                "status": {"phase": "Running"},
+            }
+        )
+        assert defaulted["service_account"] == "default"
