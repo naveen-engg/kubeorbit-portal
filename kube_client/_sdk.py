@@ -266,6 +266,26 @@ def _sync_sdk_list(
                 if namespace
                 else api.list_horizontal_pod_autoscaler_for_all_namespaces(_request_timeout=req_timeout)
             )
+        elif r in ("roles", "role", "roles.rbac.authorization.k8s.io"):
+            api = kubernetes.client.RbacAuthorizationV1Api(api_client=client)
+            raw = (
+                api.list_namespaced_role(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_role_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("clusterroles", "clusterrole", "clusterroles.rbac.authorization.k8s.io"):
+            api = kubernetes.client.RbacAuthorizationV1Api(api_client=client)
+            raw = api.list_cluster_role(_request_timeout=req_timeout)
+        elif r in ("rolebindings", "rolebinding", "rolebindings.rbac.authorization.k8s.io"):
+            api = kubernetes.client.RbacAuthorizationV1Api(api_client=client)
+            raw = (
+                api.list_namespaced_role_binding(namespace=namespace, _request_timeout=req_timeout)
+                if namespace
+                else api.list_role_binding_for_all_namespaces(_request_timeout=req_timeout)
+            )
+        elif r in ("clusterrolebindings", "clusterrolebinding", "clusterrolebindings.rbac.authorization.k8s.io"):
+            api = kubernetes.client.RbacAuthorizationV1Api(api_client=client)
+            raw = api.list_cluster_role_binding(_request_timeout=req_timeout)
         elif r in _GATEWAY_API_GATEWAYS:
             api = kubernetes.client.CustomObjectsApi(api_client=client)
             if namespace:

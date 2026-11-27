@@ -21,7 +21,7 @@ export function setStoredApiKey(key) {
   else localStorage.removeItem(API_KEY_STORAGE_KEY);
 }
 
-async function apiFetch(path, options = {}) {
+export async function apiFetch(path, options = {}) {
   const headers = { Accept: "application/json", ...(options.headers || {}) };
   const apiKey = getStoredApiKey();
   if (apiKey) headers["X-API-Key"] = apiKey;

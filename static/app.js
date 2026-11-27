@@ -3,7 +3,7 @@
 // topology.js widgets. No provider-specific branching lives here -- every
 // cloud badge/label comes pre-resolved from the backend.
 
-import { api, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
+import { api, apiFetch, ApiError, getStoredApiKey, setStoredApiKey } from "./api.js";
 import { AGUIStreamClient, PORTAL_FRONTEND_TOOLS } from "./agui.js?v=20261124-helm1";
 import { extractToolScopeLabel, renderInteractiveToolBody, safeJsonParse, summarizeToolResult } from "./agui_views.js?v=20261124-helm1";
 import { createHelmViewsController } from "./helm.js?v=20261124-helm1";
@@ -64,6 +64,7 @@ const state = {
   aiChatMessages: [],
   userRole: "admin",
   userSubject: "anonymous",
+  enterpriseUiModules: [],
   readOnlyMode: true,
 };
 
@@ -5330,6 +5331,47 @@ const viewLoaders = {
 };
 
 
+function registerExtensionView(viewId, { label, subtitle = "", iconHtml = "", insertBeforeSelector = "", load } = {}) {
+  if (!viewId || typeof load !== "function") return;
+  const sidebarNav = $("sidebar-nav");
+  const mainEl = $("main");
+  if (sidebarNav && !sidebarNav.querySelector(`.nav-tabs__item[data-view="${viewId}"]`)) {
+    const iconSpan = h("span", {
+      style: "display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex-shrink:0;",
+    });
+    iconSpan.innerHTML = iconHtml || `<svg class="icon" viewBox="0 0 24 24" style="width:16px;height:16px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`;
+    const btn = h(
+      "button",
+      {
+        class: "sidebar-item nav-tabs__item",
+        role: "tab",
+        "data-view": viewId,
+        "aria-selected": "false",
+        style: "margin-bottom:0.4rem;",
+      },
+      [iconSpan, h("span", {}, label || viewId)]
+    );
+    const anchor = insertBeforeSelector ? sidebarNav.querySelector(insertBeforeSelector) : null;
+    if (anchor && anchor.parentNode === sidebarNav) {
+      sidebarNav.insertBefore(btn, anchor);
+    } else {
+      sidebarNav.appendChild(btn);
+    }
+  }
+  if (mainEl && !mainEl.querySelector(`.view[data-view="${viewId}"]`)) {
+    const section = h("section", { id: `view-${viewId}`, class: "view", "data-view": viewId, hidden: true }, [
+      h("div", { class: "view-header" }, [
+        h("h2", {}, label || viewId),
+        h("span", { class: "view-header__meta", id: `${viewId}-meta` }, subtitle),
+      ]),
+      h("div", { id: `${viewId}-content` }),
+    ]);
+    mainEl.appendChild(section);
+  }
+  viewLoaders[viewId] = load;
+}
+
+
 async function loadActiveView(opts = {}) {
   const loader = viewLoaders[state.activeView];
   if (!loader || !state.selectedClusterId) return;
@@ -6243,6 +6285,7 @@ async function bootstrap() {
   }
   state.userRole = status.user?.role || "admin";
   state.userSubject = status.user?.subject || "anonymous";
+  state.enterpriseUiModules = Array.isArray(status.enterprise?.ui_modules) ? status.enterprise.ui_modules : [];
   state.readOnlyMode = status.read_only_mode !== false;
   applyRoleVisibility();
   const roleSuffix = status.user?.role ? ` (${status.user.role})` : "";
@@ -6253,6 +6296,36 @@ async function bootstrap() {
   if (status.disable_local_provider) {
     const localTab = document.querySelector('.provider-tab[data-provider="local"]');
     if (localTab) localTab.style.display = "none";
+  }
+
+  window.KubeOrbitPortal = {
+    state,
+    api,
+    apiFetch,
+    h,
+    renderInto,
+    pill,
+    statusPill,
+    statCard,
+    statGrid,
+    panel,
+    dataTable,
+    warningBanner,
+    emptyState,
+    errorState,
+    renderTopologyGraph,
+    topologyLegend,
+    switchView,
+    registerView: registerExtensionView,
+  };
+
+  for (const extMod of state.enterpriseUiModules) {
+    if (!extMod || !extMod.script_url) continue;
+    try {
+      await import(extMod.script_url);
+    } catch (extErr) {
+      console.warn("Failed to load enterprise UI module:", extMod.id, extErr);
+    }
   }
 
   try {

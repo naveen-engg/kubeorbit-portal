@@ -40,6 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import auth
+import extensions
 import kube_client
 from auth import CurrentUser, get_current_user, require_role
 from config import ConfigError, get_config_store, get_runtime_env
@@ -240,11 +241,21 @@ async def status(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any
     providers_list = available_providers()
     if env.disable_local_provider:
         providers_list = [p for p in providers_list if p != "local"]
+    user_rank = auth.ROLE_RANK.get(user.role, 0)
+    visible_ui_modules = [
+        m
+        for m in extensions.list_ui_modules()
+        if user_rank >= auth.ROLE_RANK.get(m.get("min_role", "viewer"), 99)
+    ]
     return {
         "version": APP_VERSION,
         "auth_mode": env.auth_mode,
         "read_only_mode": env.read_only_mode,
         "user": {"subject": user.subject, "method": user.method, "role": user.role},
+        "enterprise": {
+            "enabled": extensions.is_enterprise_loaded(),
+            "ui_modules": visible_ui_modules,
+        },
         "disable_local_provider": env.disable_local_provider,
         "providers": providers_list,
         "cli_binaries": binaries,
@@ -1357,6 +1368,8 @@ class NoCacheStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
+
+extensions.load_extensions(app)
 
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.exists():
